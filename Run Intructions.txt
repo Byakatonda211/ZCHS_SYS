@@ -6,6 +6,8 @@ npm run dev
 ▲ Next.js
 - Local: http://localhost:3000
 
+
+
 Username: admin
 Password: admin123
 
@@ -14,3 +16,22 @@ Confirm Admin exists:
 npx prisma studio
 
 http://localhost:5555
+
+DATABASE_URL="postgresql://postgres:dyIgelDFTMlVNZQjHNwzdsaOgujtCtqO@hopper.proxy.rlwy.net:53880/railway"
+DATABASE_URL="postgresql://sis:sispassword@localhost:5432/sis_db"
+
+
+
+On Add Student page, Under Enrollment -> We need to specify the subjects a student offers, these are the only subjects where the student can be awarded marks -> When Entering marks, filters by subjects will be made to make sure only students under a given enrolled subject can be given marks in that subject.
+
+Report cards (to be implemented later) will also be generated basing on subjects, only subjects a learner is enrolled to will be presented on the report card.
+
+Implementation: In the enrollment section, subjects will be listed with check-boxes Infront of each subject for selection, by default, O-level (S1 to S.4) Students will have all O-LEVEL subjects checked (this should be triggered instantly when these classes are selected), however, the admin may deselect some subjects before saving.
+
+A-level subjects should not appear on the list when any class from S1-S4 is selected and similarly, O-level subjects should not appear on the list when S5 or S6 is selected during adding a student, for S.5 & S.6, Subjects should not be preselected, the admin will manually select each on enrollment.
+
+In the Admission number entry field, lets pre-fill it with a randomly generated random code of the form (ZCHS-2026-XXXX), the XXXX is a randomly generated 2 or 3 or 4 digit number from 01 to 9999 (i'm hoping the numbers will be random enough to not repeat themselves for 1000 students since admission numbers are unique) - however, the user should be able to re-edit this randomly generated admission code to something else of their choice as long as it hasn't bee used before.
+
+As we do all this, we should not make any major changes to the 'add student' Page's UI except for adding the subjects checkboxes under enrollment section as specified earlier.
+
+Tell me which files i should upload to implement the changes.

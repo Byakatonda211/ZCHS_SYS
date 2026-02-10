@@ -13,6 +13,14 @@ type ApiStream = { id: string; classId: string; name: string };
 type ApiYear = { id: string; name: string; isCurrent: boolean };
 type ApiTerm = { id: string; name: string; isCurrent: boolean; academicYearId: string };
 
+type ApiSubject = {
+  id: string;
+  name: string;
+  code?: string | null;
+  level: 'O_LEVEL' | 'A_LEVEL';
+  isActive?: boolean;
+};
+
 async function apiGet<T>(url: string): Promise<T> {
   const res = await fetch(url, { cache: 'no-store' });
   const data = await res.json().catch(() => ({}));
@@ -42,21 +50,21 @@ const schema = z.object({
   classId: z.string().min(1, 'Class is required'),
   streamId: z.string().optional(),
   academicYearId: z.string().min(1, 'Academic year is required'),
-  // term is not stored on enrollment, but helpful for context in UI
   termId: z.string().optional(),
+
+  // ✅ NEW: optional residence section
+  residenceSection: z.enum(['DAY', 'BOARDING']).optional(),
 
   guardianName: z.string().optional(),
   guardianPhone: z.string().optional(),
   address: z.string().optional(),
 
-  // PLE particulars (optional)
   pleSittingYear: z.string().optional(),
   plePrimarySchool: z.string().optional(),
   pleIndexNumber: z.string().optional(),
   pleAggregates: z.string().optional(),
   pleDivision: z.string().optional(),
 
-  // Residence & emergency (optional)
   village: z.string().optional(),
   parish: z.string().optional(),
   districtOfResidence: z.string().optional(),
@@ -64,13 +72,21 @@ const schema = z.object({
   emergencyContactName: z.string().optional(),
   emergencyContactPhone: z.string().optional(),
 
-  // Health details (optional)
   medicalConditions: z.string().optional(),
   recurrentMedication: z.string().optional(),
   knownDisability: z.string().optional(),
 });
 
 type FormValues = z.infer<typeof schema>;
+
+function pad4(n: number) {
+  return String(n).padStart(4, '0');
+}
+function generateAdmissionNo(yearLabel: string) {
+  const year = (yearLabel || '').trim() || String(new Date().getFullYear());
+  const num = Math.floor(Math.random() * 9999) + 1;
+  return `ZCHS-${year}-${pad4(num)}`;
+}
 
 export default function NewStudentPage() {
   const router = useRouter();
@@ -84,15 +100,19 @@ export default function NewStudentPage() {
       streamId: '',
       academicYearId: '',
       termId: '',
+      residenceSection: undefined,
     },
   });
 
-  const { register, handleSubmit, formState, watch, setValue } = form;
+  const { register, handleSubmit, formState, watch, setValue, getValues } = form;
 
   const [classes, setClasses] = React.useState<ApiClass[]>([]);
   const [streams, setStreams] = React.useState<ApiStream[]>([]);
   const [years, setYears] = React.useState<ApiYear[]>([]);
   const [terms, setTerms] = React.useState<ApiTerm[]>([]);
+
+  const [subjects, setSubjects] = React.useState<ApiSubject[]>([]);
+  const [enrolledSubjectIds, setEnrolledSubjectIds] = React.useState<string[]>([]);
 
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState('');
@@ -100,27 +120,36 @@ export default function NewStudentPage() {
   const classId = watch('classId');
   const academicYearId = watch('academicYearId');
 
+  const selectedClass = React.useMemo(() => classes.find((c) => c.id === classId) || null, [classes, classId]);
+
   React.useEffect(() => {
     (async () => {
       try {
-        const [c, s, y, t] = await Promise.all([
+        const [c, s, y, t, subj] = await Promise.all([
           apiGet<ApiClass[]>('/api/settings/classes'),
           apiGet<ApiStream[]>('/api/settings/streams'),
           apiGet<ApiYear[]>('/api/settings/academic-years'),
           apiGet<ApiTerm[]>('/api/settings/terms'),
+          apiGet<ApiSubject[]>('/api/settings/subjects'),
         ]);
 
         setClasses((c || []).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0)));
         setStreams(s || []);
         setYears(y || []);
         setTerms(t || []);
+        setSubjects((subj || []).filter((x: any) => x?.isActive !== false));
 
         const currentYear = (y || []).find((yy) => yy.isCurrent) ?? (y || [])[0];
         if (currentYear) setValue('academicYearId', currentYear.id);
 
-        // default class if exists
         const firstClass = (c || []).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0))[0];
         if (firstClass) setValue('classId', firstClass.id);
+
+        const currentAdmission = String(getValues('admissionNo') || '').trim();
+        if (!currentAdmission) {
+          const yearName = currentYear?.name || String(new Date().getFullYear());
+          setValue('admissionNo', generateAdmissionNo(yearName), { shouldDirty: true });
+        }
       } catch (e: any) {
         setErr(e?.message || 'Failed to load academic setup');
       }
@@ -132,7 +161,6 @@ export default function NewStudentPage() {
   const termsForYear = React.useMemo(() => terms.filter((t) => t.academicYearId === academicYearId), [terms, academicYearId]);
 
   React.useEffect(() => {
-    // reset stream if not in selected class
     const currentStreamId = watch('streamId');
     if (currentStreamId && !streamsForClass.some((s) => s.id === currentStreamId)) {
       setValue('streamId', '');
@@ -141,11 +169,24 @@ export default function NewStudentPage() {
   }, [classId, streamsForClass.length]);
 
   React.useEffect(() => {
-    // pick current term (optional)
     const current = termsForYear.find((tt) => tt.isCurrent) ?? termsForYear[0];
     if (current) setValue('termId', current.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [academicYearId, termsForYear.length]);
+
+  const visibleSubjects = React.useMemo(() => {
+    if (!selectedClass) return [];
+    return subjects.filter((s) => s.level === selectedClass.level);
+  }, [subjects, selectedClass]);
+
+  // ✅ CHANGED: subjects selection is OPTIONAL (no auto-select)
+  React.useEffect(() => {
+    setEnrolledSubjectIds([]);
+  }, [selectedClass?.id]);
+
+  function toggleSubject(subjectId: string) {
+    setEnrolledSubjectIds((prev) => (prev.includes(subjectId) ? prev.filter((x) => x !== subjectId) : [...prev, subjectId]));
+  }
 
   async function onSubmit(values: FormValues) {
     setErr('');
@@ -162,14 +203,15 @@ export default function NewStudentPage() {
         guardianName: values.guardianName || null,
         guardianPhone: values.guardianPhone || null,
 
-        // PLE particulars
+        // ✅ NEW
+        residenceSection: values.residenceSection || null,
+
         pleSittingYear: values.pleSittingYear || null,
         plePrimarySchool: values.plePrimarySchool || null,
         pleIndexNumber: values.pleIndexNumber || null,
         pleAggregates: values.pleAggregates || null,
         pleDivision: values.pleDivision || null,
 
-        // Residence & emergency
         village: values.village || null,
         parish: values.parish || null,
         districtOfResidence: values.districtOfResidence || null,
@@ -177,15 +219,16 @@ export default function NewStudentPage() {
         emergencyContactName: values.emergencyContactName || null,
         emergencyContactPhone: values.emergencyContactPhone || null,
 
-        // Health details
         medicalConditions: values.medicalConditions || null,
         recurrentMedication: values.recurrentMedication || null,
         knownDisability: values.knownDisability || null,
 
-        // enrollment info
         academicYearId: values.academicYearId,
         classId: values.classId,
         streamId: values.streamId || null,
+
+        // ✅ Optional subjects
+        enrolledSubjectIds,
       });
 
       router.push('/students');
@@ -211,7 +254,7 @@ export default function NewStudentPage() {
           <div className="p-5 pt-0 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-2">
               <Label>Student Number</Label>
-              <Input {...register('admissionNo')} placeholder="SCH-2026-001" />
+              <Input {...register('admissionNo')} placeholder="ZCHS-2026-0001" />
               {formState.errors.admissionNo ? (
                 <p className="text-xs text-red-600">{formState.errors.admissionNo.message}</p>
               ) : null}
@@ -328,6 +371,74 @@ export default function NewStudentPage() {
                   </option>
                 ))}
               </select>
+            </div>
+
+            {/* ✅ NEW: Residence Section dropdown (optional) */}
+            <div className="space-y-2 sm:col-span-2">
+              <Label>Residence Section (optional)</Label>
+              <select
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-900 outline-none focus:ring-2 focus:ring-slate-200"
+                value={watch('residenceSection') || ''}
+                onChange={(e) => setValue('residenceSection', (e.target.value || undefined) as any)}
+              >
+                <option value="">(optional)</option>
+                <option value="DAY">Day</option>
+                <option value="BOARDING">Boarding</option>
+              </select>
+            </div>
+
+            {/* Subjects checklist (optional) */}
+            <div className="space-y-2 sm:col-span-2">
+              <div className="flex items-end justify-between gap-2">
+                <div>
+                  <Label>Subjects Offered (optional)</Label>
+                  <p className="text-xs text-slate-600">You may leave this blank (optional).</p>
+                </div>
+
+                {selectedClass ? (
+                  <button
+                    type="button"
+                    className="text-xs font-semibold text-slate-700 hover:text-slate-900"
+                    onClick={() => {
+                      const ids = visibleSubjects.map((s) => s.id);
+                      setEnrolledSubjectIds(ids);
+                    }}
+                  >
+                    Select all
+                  </button>
+                ) : null}
+              </div>
+
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {selectedClass ? (
+                  visibleSubjects.length ? (
+                    visibleSubjects.map((sub) => {
+                      const checked = enrolledSubjectIds.includes(sub.id);
+                      return (
+                        <label
+                          key={sub.id}
+                          className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800"
+                        >
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4"
+                            checked={checked}
+                            onChange={() => toggleSubject(sub.id)}
+                          />
+                          <span className="flex-1">
+                            {sub.name}
+                            {sub.code ? <span className="text-slate-500"> ({sub.code})</span> : null}
+                          </span>
+                        </label>
+                      );
+                    })
+                  ) : (
+                    <div className="text-sm text-slate-600">No subjects found for this level.</div>
+                  )
+                ) : (
+                  <div className="text-sm text-slate-600">Select a class to show subjects.</div>
+                )}
+              </div>
             </div>
           </div>
         </Card>

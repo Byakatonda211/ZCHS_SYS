@@ -10,49 +10,49 @@ type ApiTeacher = {
   username: string;
   role: 'ADMIN' | 'CLASS_TEACHER' | 'SUBJECT_TEACHER';
   isActive: boolean;
-  createdAt?: string;
 };
 
-type ApiClass = { id: string; name: string; level: 'O_LEVEL' | 'A_LEVEL'; order: number };
+type ApiClass = { id: string; name: string; level?: string | null };
 type ApiStream = { id: string; name: string; classId: string };
-type ApiSubject = { id: string; name: string };
+type ApiSubject = { id: string; name: string; level?: string | null };
 
 type Assignment = {
   id: string;
-  teacherId: string;
+  // API uses userId; keep teacherId for backward compatibility
+  userId?: string;
+  teacherId?: string;
   classId: string;
   streamId: string | null;
   subjectId: string | null;
   isClassTeacher: boolean;
   createdAt?: string;
+  user?: { id: string; fullName: string; initials?: string };
+  class?: { id: string; name: string; level?: string };
+  stream?: { id: string; name: string } | null;
+  subject?: { id: string; name: string } | null;
 };
-
-type Option = { value: string; label: string };
 
 async function apiGet<T>(url: string): Promise<T> {
   const res = await fetch(url, { cache: 'no-store' });
-  if (!res.ok) throw new Error(`GET ${url} failed`);
-  return res.json();
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Error((data as any)?.error || `Request failed (${res.status})`);
+  return data as T;
 }
 
-async function apiPost<T>(url: string, body: any): Promise<T> {
+async function apiSend(url: string, body?: any, method: string = 'POST') {
   const res = await fetch(url, {
-    method: 'POST',
+    method,
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: body ? JSON.stringify(body) : undefined,
   });
-  if (!res.ok) throw new Error(`POST ${url} failed`);
-  return res.json();
-}
-
-async function apiDelete(url: string): Promise<void> {
-  const res = await fetch(url, { method: 'DELETE' });
-  if (!res.ok) throw new Error(`DELETE ${url} failed`);
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Error((data as any)?.error || `Request failed (${res.status})`);
+  return data;
 }
 
 export default function TeachersSettingsPage() {
   const [loading, setLoading] = React.useState(true);
-  const [err, setErr] = React.useState<string>('');
+  const [err, setErr] = React.useState('');
 
   const [teachers, setTeachers] = React.useState<ApiTeacher[]>([]);
   const [classes, setClasses] = React.useState<ApiClass[]>([]);
@@ -91,36 +91,21 @@ export default function TeachersSettingsPage() {
       setStreams(s);
       setSubjects(sub);
       setAssignments(a);
-
-      // default selection
-      if (!teacherId && t.length) setTeacherId(t[0].id);
-      if (!classId && c.length) setClassId(c.sort((a, b) => a.order - b.order)[0].id);
     } catch (e: any) {
-      setErr(e?.message ?? 'Failed to load');
+      setErr(e?.message || 'Failed to load');
     } finally {
       setLoading(false);
     }
-  }, [teacherId, classId]);
+  }, []);
 
   React.useEffect(() => {
-    void load();
+    load();
   }, [load]);
-
-  const streamOptions: Option[] = React.useMemo(() => {
-    if (!classId) return [];
-    return streams
-      .filter((st) => st.classId === classId)
-      .map((st) => ({ value: st.id, label: st.name }));
-  }, [streams, classId]);
-
-  const subjectOptions: Option[] = React.useMemo(() => {
-    return subjects.map((s) => ({ value: s.id, label: s.name }));
-  }, [subjects]);
 
   async function createTeacher() {
     setErr('');
     try {
-      await apiPost('/api/teachers', { fullName, initials, username, password, role });
+      await apiSend('/api/teachers', { fullName, initials, username, password, role }, 'POST');
       setFullName('');
       setInitials('');
       setUsername('');
@@ -128,90 +113,102 @@ export default function TeachersSettingsPage() {
       setRole('SUBJECT_TEACHER');
       await load();
     } catch (e: any) {
-      setErr(e?.message ?? 'Failed to create teacher');
-    }
-  }
-
-  async function createAssignment() {
-    setErr('');
-    try {
-      await apiPost('/api/teachers/assignments', {
-        teacherId,
-        classId,
-        streamId: streamId || null,
-        subjectId: isClassTeacher ? null : subjectId || null,
-        isClassTeacher,
-      });
-      await load();
-    } catch (e: any) {
-      setErr(e?.message ?? 'Failed to assign');
-    }
-  }
-
-  async function deleteAssignment(id: string) {
-    setErr('');
-    try {
-      await apiDelete(`/api/teachers/assignments/${id}`);
-      await load();
-    } catch (e: any) {
-      setErr(e?.message ?? 'Failed to delete assignment');
+      setErr(e?.message || 'Failed to create teacher');
     }
   }
 
   async function toggleTeacherActive(id: string, isActive: boolean) {
     setErr('');
     try {
-      await apiPost(`/api/teachers/${id}`, { isActive: !isActive });
+      await apiSend(`/api/teachers/${id}`, { isActive: !isActive }, 'POST');
       await load();
     } catch (e: any) {
-      setErr(e?.message ?? 'Failed to update teacher');
+      setErr(e?.message || 'Failed to update teacher status');
     }
   }
 
+  async function createAssignment() {
+    setErr('');
+    try {
+      await apiSend('/api/teachers/assignments', {
+        userId: teacherId,
+        teacherId,
+        classId,
+        streamId: streamId || null,
+        subjectId: isClassTeacher ? null : subjectId || null,
+        isClassTeacher,
+      });
+      setTeacherId('');
+      setClassId('');
+      setStreamId('');
+      setSubjectId('');
+      setIsClassTeacher(false);
+      await load();
+    } catch (e: any) {
+      setErr(e?.message || 'Failed to assign');
+    }
+  }
+
+  async function deleteAssignment(id: string) {
+    setErr('');
+    try {
+      await apiSend(`/api/teachers/assignments/${id}`, undefined, 'DELETE');
+      await load();
+    } catch (e: any) {
+      setErr(e?.message || 'Failed to remove assignment');
+    }
+  }
+
+  const streamsForClass = streams.filter((s) => (classId ? s.classId === classId : true));
+  const isALevelClass = React.useMemo(() => {
+    const c = classes.find((x) => x.id === classId);
+    const name = (c?.name || '').toUpperCase();
+    return name.includes('S5') || name.includes('S6');
+  }, [classId, classes]);
+
+  const visibleSubjects = React.useMemo(() => {
+    if (!classId) return subjects;
+    if (isALevelClass) return subjects.filter((s) => String(s.level || '').toUpperCase().includes('A'));
+    return subjects.filter((s) => !String(s.level || '').toUpperCase().includes('A'));
+  }, [subjects, classId, isALevelClass]);
+
   return (
-    <div className="max-w-6xl mx-auto p-6 space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold">Teachers</h1>
-          <p className="text-sm text-slate-600">Manage teacher accounts and assign them to classes/streams and subjects.</p>
-        </div>
-        <Badge>{teachers.length} teachers</Badge>
+    <div className="space-y-4">
+      <div>
+        <div className="text-2xl font-extrabold text-slate-900">Teachers</div>
+        <div className="text-sm text-slate-600">Create accounts and assign classes/subjects.</div>
       </div>
 
-      {err ? (
-        <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{err}</div>
-      ) : null}
+      {err ? <div className="text-sm text-red-600">{err}</div> : null}
 
       <Card>
-        <CardHeader title="Create Teacher" />
-        <div className="p-5 pt-0 grid grid-cols-1 gap-3 md:grid-cols-2">
-          <div className="space-y-2">
+        <CardHeader title="Create Teacher Account" />
+        <div className="p-5 pt-0 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div>
             <Label>Full Name</Label>
-            <Input value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="e.g. Jane Doe" />
+            <Input value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="e.g. John Doe" />
           </div>
-          <div className="space-y-2">
+          <div>
             <Label>Initials</Label>
             <Input value={initials} onChange={(e) => setInitials(e.target.value)} placeholder="e.g. JD" />
           </div>
-          <div className="space-y-2">
+          <div>
             <Label>Username</Label>
-            <Input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="e.g. jdoe" />
+            <Input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="e.g. johndoe" />
           </div>
-          <div className="space-y-2">
+          <div>
             <Label>Password</Label>
-            <Input value={password} onChange={(e) => setPassword(e.target.value)} type="password" />
+            <Input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Set a password" />
           </div>
-
-          <div className="space-y-2">
+          <div>
             <Label>Role</Label>
             <Select value={role} onChange={(e) => setRole(e.target.value as any)}>
-              <option value="SUBJECT_TEACHER">Subject Teacher</option>
-              <option value="CLASS_TEACHER">Class Teacher</option>
-              <option value="ADMIN">Administrator</option>
+              <option value="SUBJECT_TEACHER">SUBJECT_TEACHER</option>
+              <option value="CLASS_TEACHER">CLASS_TEACHER</option>
+              <option value="ADMIN">ADMIN</option>
             </Select>
           </div>
-
-          <div className="md:col-span-2 flex justify-end">
+          <div className="flex items-end">
             <Button onClick={createTeacher} disabled={!fullName || !username || !password || loading}>
               Create
             </Button>
@@ -220,77 +217,76 @@ export default function TeachersSettingsPage() {
       </Card>
 
       <Card>
-        <CardHeader title="Assign Teacher" right={<Badge>{assignments.length}</Badge>} />
-        <div className="p-5 pt-0 grid grid-cols-1 gap-3 md:grid-cols-2">
-          <div className="space-y-2">
+        <CardHeader title="Assign Teacher" subtitle="Assign class teacher or subject teacher roles" />
+        <div className="p-5 pt-0 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div>
             <Label>Teacher</Label>
             <Select value={teacherId} onChange={(e) => setTeacherId(e.target.value)}>
+              <option value="">Select teacher</option>
               {teachers.map((t) => (
                 <option key={t.id} value={t.id}>
-                  {t.fullName} ({t.initials})
+                  {t.fullName} ({t.username})
                 </option>
               ))}
             </Select>
           </div>
 
-          <div className="space-y-2">
+          <div>
             <Label>Class</Label>
-            <Select
-              value={classId}
-              onChange={(e) => {
-                const v = e.target.value;
-                setClassId(v);
-                setStreamId('');
-                setSubjectId('');
-              }}
-            >
-              {classes
-                .sort((a, b) => a.order - b.order)
-                .map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name} ({c.level === 'A_LEVEL' ? 'A-Level' : 'O-Level'})
-                  </option>
-                ))}
+            <Select value={classId} onChange={(e) => setClassId(e.target.value)}>
+              <option value="">Select class</option>
+              {classes.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
             </Select>
           </div>
 
-          <div className="space-y-2">
+          <div>
             <Label>Stream (optional)</Label>
             <Select value={streamId} onChange={(e) => setStreamId(e.target.value)}>
-              <option value="">All streams</option>
-              {streamOptions.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
+              <option value="">—</option>
+              {streamsForClass.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
                 </option>
               ))}
             </Select>
           </div>
 
-          <div className="space-y-2">
-            <Label>Subject {isClassTeacher ? '(not required)' : ''}</Label>
-            <Select value={subjectId} onChange={(e) => setSubjectId(e.target.value)} disabled={isClassTeacher}>
+          <div className="flex items-end gap-3">
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={isClassTeacher}
+                onChange={(e) => setIsClassTeacher(e.target.checked)}
+              />
+              Class Teacher
+            </label>
+          </div>
+
+          <div className="lg:col-span-2">
+            <Label>Subject (required if not class teacher)</Label>
+            <Select
+              value={subjectId}
+              onChange={(e) => setSubjectId(e.target.value)}
+              disabled={isClassTeacher}
+            >
               <option value="">{isClassTeacher ? '—' : 'Select subject'}</option>
-              {subjectOptions.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
+              {visibleSubjects.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
                 </option>
               ))}
             </Select>
           </div>
 
-          <div className="md:col-span-2 flex items-center gap-2">
-            <input
-              id="isClassTeacher"
-              type="checkbox"
-              className="h-4 w-4"
-              checked={isClassTeacher}
-              onChange={(e) => setIsClassTeacher(e.target.checked)}
-            />
-            <Label htmlFor="isClassTeacher">This teacher is a class teacher (subject not required)</Label>
-          </div>
-
-          <div className="md:col-span-2 flex justify-end">
-            <Button onClick={createAssignment} disabled={!teacherId || !classId || (!isClassTeacher && !subjectId) || loading}>
+          <div className="flex items-end">
+            <Button
+              onClick={createAssignment}
+              disabled={!teacherId || !classId || (!isClassTeacher && !subjectId) || loading}
+            >
               Assign
             </Button>
           </div>
@@ -303,9 +299,9 @@ export default function TeachersSettingsPage() {
           {loading ? (
             <div className="text-sm text-slate-600">Loading…</div>
           ) : (
-            <table className="w-full text-sm">
+            <table className="w-full text-sm text-slate-900">
               <thead>
-                <tr className="text-left text-slate-600">
+                <tr className="text-left text-slate-700">
                   <th className="py-2">Name</th>
                   <th className="py-2">Username</th>
                   <th className="py-2">Role</th>
@@ -316,10 +312,10 @@ export default function TeachersSettingsPage() {
               <tbody>
                 {teachers.map((t) => (
                   <tr key={t.id} className="border-t">
-                    <td className="py-2">{t.fullName}</td>
-                    <td className="py-2">{t.username}</td>
-                    <td className="py-2">{t.role}</td>
-                    <td className="py-2">{t.isActive ? 'Active' : 'Inactive'}</td>
+                    <td className="py-2 text-slate-900">{t.fullName}</td>
+                    <td className="py-2 text-slate-900">{t.username}</td>
+                    <td className="py-2 text-slate-900">{t.role}</td>
+                    <td className="py-2 text-slate-900">{t.isActive ? 'Active' : 'Inactive'}</td>
                     <td className="py-2 text-right">
                       <Button variant="ghost" onClick={() => toggleTeacherActive(t.id, t.isActive)}>
                         {t.isActive ? 'Deactivate' : 'Activate'}
@@ -341,9 +337,9 @@ export default function TeachersSettingsPage() {
           ) : assignments.length === 0 ? (
             <div className="text-sm text-slate-600">No assignments yet.</div>
           ) : (
-            <table className="w-full text-sm">
+            <table className="w-full text-sm text-slate-900">
               <thead>
-                <tr className="text-left text-slate-600">
+                <tr className="text-left text-slate-700">
                   <th className="py-2">Teacher</th>
                   <th className="py-2">Class</th>
                   <th className="py-2">Stream</th>
@@ -355,13 +351,27 @@ export default function TeachersSettingsPage() {
               <tbody>
                 {assignments.map((a) => (
                   <tr key={a.id} className="border-t">
-                    <td className="py-2">{teachers.find((t) => t.id === a.teacherId)?.fullName ?? a.teacherId}</td>
-                    <td className="py-2">{classes.find((c) => c.id === a.classId)?.name ?? a.classId}</td>
-                    <td className="py-2">{a.streamId ? streams.find((s) => s.id === a.streamId)?.name ?? a.streamId : '—'}</td>
-                    <td className="py-2">
-                      {a.isClassTeacher ? '—' : a.subjectId ? subjects.find((s) => s.id === a.subjectId)?.name ?? a.subjectId : '—'}
+                    <td className="py-2 text-slate-900">
+                      {a.user?.fullName ??
+                        teachers.find((t) => t.id === (a.userId || a.teacherId))?.fullName ??
+                        (a.userId || a.teacherId || '—')}
                     </td>
-                    <td className="py-2">{a.isClassTeacher ? 'Class Teacher' : 'Subject Teacher'}</td>
+                    <td className="py-2 text-slate-900">
+                      {a.class?.name ?? classes.find((c) => c.id === a.classId)?.name ?? a.classId}
+                    </td>
+                    <td className="py-2 text-slate-900">
+                      {a.streamId
+                        ? a.stream?.name ?? streams.find((s) => s.id === a.streamId)?.name ?? a.streamId
+                        : '—'}
+                    </td>
+                    <td className="py-2 text-slate-900">
+                      {a.isClassTeacher
+                        ? '—'
+                        : a.subjectId
+                        ? a.subject?.name ?? subjects.find((s) => s.id === a.subjectId)?.name ?? a.subjectId
+                        : '—'}
+                    </td>
+                    <td className="py-2 text-slate-900">{a.isClassTeacher ? 'Class Teacher' : 'Subject Teacher'}</td>
                     <td className="py-2 text-right">
                       <Button variant="ghost" onClick={() => deleteAssignment(a.id)}>
                         Remove

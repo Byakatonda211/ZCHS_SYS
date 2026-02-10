@@ -1,0 +1,23 @@
+ROLE BASED ACCESS RULES
+
+ADMIN
+-Has Global Privileges, Can Access all pages, make edits, create teacher accounts, enter marks, add students, edit settings, edit remarks, Generate Report Cards, view performance analytics, View all enrolled Students, View Class Lists for their Class
+
+
+CLASS_TEACHER
+- Can Enter Marks for all subjects in their class, view performance analytics, View Class Lists (Enrolled Students) for their Class, View Class Lists (Enrolled Students) for other Class and subjects they are assigned at least one subject.
+
+SUBJECT_TEACHER
+- Can Enter Marks for the assigned subject under a class, view performance analytics, View Class Lists (Enrolled Students) for the Class where they are assigned at least one subject, View Class Lists (Enrolled Students) Classes where they are assigned at least one subject.
+
+A CLASS TEACHER CAN ALSO BE A SUBJECT TEACHER
+
+
+
+===========  CURRENT SYSTEM STATUS QUO & waY forward ==============================
+- Admin can create teacher accounts
+- Admin can assign roles when creating teacher accounts 
+- When Admin tries to deactivate a teacher account using the 'deactivate' button, we get a 405 error: "POST /api/teachers/72fb58e3-71a4-44a5-bce7-4e37fbc069a1 failed" -> we need to work on this
+- The 'Assign Teacher' part is not yet active -> this should allow class and subject level assignment so that subject teachers can access enrolled students / class lists for their classes and subjects
+- Depending on the assigned roles, we need to make some buttons disappear from the dashboard for some users but also prevent access via any links
+

@@ -44,6 +44,9 @@ const schema = z.object({
   medicalConditions: z.string().optional(),
   recurrentMedication: z.string().optional(),
   knownDisability: z.string().optional(),
+
+  // NEW (optional): Residence Section dropdown
+  residenceSection: z.union([z.enum(["DAY", "BOARDING"]), z.literal("")]).optional(),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -55,6 +58,11 @@ export default function EditStudentPage() {
 
   const [loading, setLoading] = React.useState(true);
   const [notFound, setNotFound] = React.useState(false);
+
+  // NEW: for editable enrollment subjects (optional)
+  const [studentClassId, setStudentClassId] = React.useState<string>("");
+  const [subjectOptions, setSubjectOptions] = React.useState<Array<{ id: string; name: string }>>([]);
+  const [selectedSubjectIds, setSelectedSubjectIds] = React.useState<string[]>([]);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -86,6 +94,7 @@ export default function EditStudentPage() {
       medicalConditions: "",
       recurrentMedication: "",
       knownDisability: "",
+      residenceSection: "",
     },
   });
 
@@ -99,60 +108,78 @@ export default function EditStudentPage() {
         setLoading(true);
         const res = await fetch(`/api/students/${id}`, { cache: "no-store" });
         const data = await res.json().catch(() => ({}));
+        const stu = (data as any)?.student ?? (data as any)?.data ?? data;
 
         if (!res.ok) {
           if (res.status === 404) {
             setNotFound(true);
             return;
           }
-          throw new Error(data?.error || `Failed to load student (${res.status})`);
+          throw new Error((data as any)?.error || `Failed to load student (${res.status})`);
         }
 
         if (cancelled) return;
 
         const gender =
-          data?.gender === "MALE"
+          stu?.gender === "MALE"
             ? "Male"
-            : data?.gender === "FEMALE"
+            : stu?.gender === "FEMALE"
             ? "Female"
-            : data?.gender === "OTHER"
+            : stu?.gender === "OTHER"
             ? "Other"
             : "Male";
 
         reset({
-          studentNo: data?.admissionNo ?? "",
-          firstName: data?.firstName ?? "",
-          lastName: data?.lastName ?? "",
-          otherName: data?.otherNames ?? "",
+          studentNo: stu?.admissionNo ?? "",
+          firstName: stu?.firstName ?? "",
+          lastName: stu?.lastName ?? "",
+          otherName: stu?.otherNames ?? "",
           gender,
-          dob: data?.dateOfBirth ? String(data.dateOfBirth).slice(0, 10) : "",
-          guardianName: data?.guardianName ?? "",
-          guardianPhone: data?.guardianPhone ?? "",
-          address: data?.address ?? "",
-          religion: data?.religion ?? "",
-          nationality: data?.nationality ?? "",
-          medicalNotes: data?.medicalNotes ?? "",
-          emergencyContactName: data?.emergencyContactName ?? "",
-          emergencyContactPhone: data?.emergencyContactPhone ?? "",
+          dob: stu?.dateOfBirth ? String(stu.dateOfBirth).slice(0, 10) : "",
+          guardianName: stu?.guardianName ?? "",
+          guardianPhone: stu?.guardianPhone ?? "",
+          address: stu?.address ?? "",
+          religion: stu?.religion ?? "",
+          nationality: stu?.nationality ?? "",
+          medicalNotes: stu?.medicalNotes ?? "",
+          emergencyContactName: stu?.emergencyContactName ?? "",
+          emergencyContactPhone: stu?.emergencyContactPhone ?? "",
 
-          pleSittingYear: data?.pleSittingYear != null ? String(data.pleSittingYear) : "",
-          plePrimarySchool: data?.plePrimarySchool ?? "",
-          pleIndexNumber: data?.pleIndexNumber ?? "",
-          pleAggregates: data?.pleAggregates != null ? String(data.pleAggregates) : "",
-          pleDivision: data?.pleDivision ?? "",
+          pleSittingYear: stu?.pleSittingYear != null ? String(stu.pleSittingYear) : "",
+          plePrimarySchool: stu?.plePrimarySchool ?? "",
+          pleIndexNumber: stu?.pleIndexNumber ?? "",
+          pleAggregates: stu?.pleAggregates != null ? String(stu.pleAggregates) : "",
+          pleDivision: stu?.pleDivision ?? "",
 
-          village: data?.village ?? "",
-          parish: data?.parish ?? "",
-          districtOfResidence: data?.districtOfResidence ?? "",
-          homeDistrict: data?.homeDistrict ?? "",
+          village: stu?.village ?? "",
+          parish: stu?.parish ?? "",
+          districtOfResidence: stu?.districtOfResidence ?? "",
+          homeDistrict: stu?.homeDistrict ?? "",
 
-          medicalConditions: data?.medicalConditions ?? "",
-          recurrentMedication: data?.recurrentMedication ?? "",
-          knownDisability: data?.knownDisability ?? "",
+          medicalConditions: stu?.medicalConditions ?? "",
+          recurrentMedication: stu?.recurrentMedication ?? "",
+          knownDisability: stu?.knownDisability ?? "",
+
+          // NEW
+          residenceSection: stu?.residenceSection ?? "",
 
           term: "Term 1",
           status: "Active",
         });
+
+        // NEW: figure out active enrollment and selected subjects (optional)
+        const activeEnrollment =
+          (stu?.enrollments || []).find((e: any) => e?.isActive) || (stu?.enrollments || [])[0];
+
+        const clsId = String(activeEnrollment?.classId || "").trim();
+        setStudentClassId(clsId);
+
+        const ids = Array.isArray(activeEnrollment?.subjects)
+          ? activeEnrollment.subjects
+              .map((x: any) => String(x?.subjectId || x?.subject?.id || ""))
+              .filter(Boolean)
+          : [];
+        setSelectedSubjectIds(ids);
       } catch {
         setNotFound(true);
       } finally {
@@ -164,6 +191,45 @@ export default function EditStudentPage() {
       cancelled = true;
     };
   }, [id, reset]);
+
+  // NEW: load subject options for the student's class (optional)
+  React.useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        if (!studentClassId) {
+          setSubjectOptions([]);
+          return;
+        }
+
+        const res = await fetch(`/api/subjects?classId=${encodeURIComponent(studentClassId)}`, { cache: "no-store" });
+        const data = await res.json().catch(() => []);
+        if (!res.ok) {
+          setSubjectOptions([]);
+          return;
+        }
+
+        if (cancelled) return;
+
+        const opts = Array.isArray(data)
+          ? data.map((x: any) => ({ id: String(x?.id || ""), name: String(x?.name || "") })).filter((x: any) => x.id)
+          : [];
+        setSubjectOptions(opts);
+      } catch {
+        setSubjectOptions([]);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [studentClassId]);
+
+  // NEW helper
+  function toggleSubject(subjectId: string) {
+    setSelectedSubjectIds((prev) => (prev.includes(subjectId) ? prev.filter((x) => x !== subjectId) : [...prev, subjectId]));
+  }
 
   async function onSubmit(values: FormValues) {
     try {
@@ -200,6 +266,12 @@ export default function EditStudentPage() {
         medicalConditions: values.medicalConditions?.trim() || null,
         recurrentMedication: values.recurrentMedication?.trim() || null,
         knownDisability: values.knownDisability?.trim() || null,
+
+        // NEW (optional)
+        residenceSection: values.residenceSection ? values.residenceSection : null,
+
+        // NEW (optional)
+        enrolledSubjectIds: selectedSubjectIds,
       };
 
       const res = await fetch(`/api/students/${id}`, {
@@ -208,7 +280,7 @@ export default function EditStudentPage() {
         body: JSON.stringify(payload),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || `Update failed (${res.status})`);
+      if (!res.ok) throw new Error((data as any)?.error || `Update failed (${res.status})`);
 
       router.push(`/students/${id}`);
       router.refresh();
@@ -331,6 +403,16 @@ export default function EditStudentPage() {
             <div className="mt-1 text-xs text-slate-500">Optional</div>
           </div>
 
+          {/* NEW: Residence Section (optional) */}
+          <div className="space-y-2">
+            <Label>Residence Section</Label>
+            <Select {...register("residenceSection")}>
+              <option value="">—</option>
+              <option value="DAY">Day</option>
+              <option value="BOARDING">Boarding</option>
+            </Select>
+          </div>
+
           <div className="space-y-2">
             <Label>Village</Label>
             <Input {...register("village")} placeholder="optional" />
@@ -364,6 +446,29 @@ export default function EditStudentPage() {
           <div className="space-y-2 sm:col-span-2">
             <Label>Known Disability</Label>
             <Input {...register("knownDisability")} placeholder="optional" />
+          </div>
+
+          {/* NEW: Subjects (optional) */}
+          <div className="sm:col-span-2 pt-2">
+            <div className="text-sm font-extrabold text-slate-900">Subjects</div>
+            <div className="mt-1 text-xs text-slate-500">Optional</div>
+          </div>
+
+          <div className="sm:col-span-2">
+            <div className="rounded-2xl border border-slate-200 p-4">
+              {subjectOptions.length === 0 ? (
+                <div className="text-sm text-slate-600">No subjects available for this class.</div>
+              ) : (
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {subjectOptions.map((s) => (
+                    <label key={s.id} className="flex items-center gap-2 text-sm text-slate-800">
+                      <input type="checkbox" checked={selectedSubjectIds.includes(s.id)} onChange={() => toggleSubject(s.id)} />
+                      {s.name}
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="flex flex-col gap-2 sm:col-span-2 sm:flex-row sm:justify-end">

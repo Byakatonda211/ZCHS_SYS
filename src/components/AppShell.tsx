@@ -6,8 +6,7 @@ import React from "react";
 import { Badge, Button, Card } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import {
-  clearSession,
-  getSession,
+  clearSession, // still used for logout if you keep local session too
   seedStudentsIfEmpty,
   seedSettingsIfEmpty,
   seedEnrollmentsIfEmpty,
@@ -39,6 +38,18 @@ const nav = [
   { href: "/settings/remarks", label: "Remarks", icon: MessageSquareText },
 ];
 
+type Me = { id: string; fullName: string; username: string; role: string };
+
+async function apiGetMe(): Promise<Me | null> {
+  try {
+    const res = await fetch("/api/auth/me", { cache: "no-store" });
+    if (!res.ok) return null;
+    return (await res.json()) as Me;
+  } catch {
+    return null;
+  }
+}
+
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -47,25 +58,57 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [role, setRole] = React.useState<string>("");
 
   React.useEffect(() => {
-    const s = getSession();
-    if (!s) {
-      router.replace("/login");
-      return;
-    }
-    setRole(s.role);
+    let cancelled = false;
 
-    // ✅ ensure defaults exist
-    seedSettingsIfEmpty();
-    seedStudentsIfEmpty();
-    seedEnrollmentsIfEmpty();
-    seedTeachersIfEmpty();
-    seedRemarkRulesIfEmpty();
+    (async () => {
+      const me = await apiGetMe();
+
+      if (cancelled) return;
+
+      if (!me) {
+        // If cookie session is missing/expired, go login
+        router.replace("/login");
+        return;
+      }
+
+      setRole(me.role);
+
+      // keep your seeding behavior
+      seedSettingsIfEmpty();
+      seedStudentsIfEmpty();
+      seedEnrollmentsIfEmpty();
+      seedTeachersIfEmpty();
+      seedRemarkRulesIfEmpty();
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
 
   function logout() {
+    // Keep existing behavior; your real auth is cookie-based though.
     clearSession();
+    // Optional: if you have /api/auth/logout later, call it.
     router.push("/login");
   }
+
+  const isAdmin = role === "ADMIN";
+
+  // ✅ Hide admin-only nav items for non-admins
+  const filteredNav = React.useMemo(() => {
+    if (isAdmin) return nav;
+
+    return nav.filter((item) => {
+      if (item.href === "/dashboard") return true;
+      if (item.href === "/students") return true;
+      if (item.href === "/marks") return true;
+      if (item.href === "/analysis") return true;
+
+      // hide: add student, report cards, settings, teachers, remarks
+      return false;
+    });
+  }, [isAdmin]);
 
   const Sidebar = (
     <div className="flex h-full flex-col gap-4 p-4">
@@ -88,7 +131,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       </div>
 
       <nav className="flex flex-col gap-1">
-        {nav.map((item) => {
+        {filteredNav.map((item) => {
           const active = pathname === item.href || pathname.startsWith(item.href + "/");
           const Icon = item.icon;
 
@@ -115,7 +158,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <Card className="p-3">
           <div className="text-xs text-slate-500">Signed in as</div>
           <div className="text-sm font-extrabold text-slate-900">
-            {role || "—"}
+            {role === "ADMIN" ? "Administrator" : "Teacher"}
           </div>
           <div className="mt-3 flex gap-2">
             <Button className="w-full" variant="secondary" onClick={logout}>

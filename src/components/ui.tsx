@@ -21,19 +21,29 @@ export function CardHeader({
   right,
   className,
 }: {
-  title: string;
-  subtitle?: string;
+  title: React.ReactNode;
+  subtitle?: React.ReactNode;
   right?: React.ReactNode;
   className?: string;
 }) {
+  const isTextSubtitle =
+    typeof subtitle === "string" || typeof subtitle === "number";
+
   return (
     <div className={cn("flex items-start justify-between gap-4 p-5", className)}>
       <div>
         <h3 className="text-base font-semibold text-slate-900">{title}</h3>
+
         {subtitle ? (
-          <p className="mt-1 text-sm text-slate-500">{subtitle}</p>
+          isTextSubtitle ? (
+            <p className="mt-1 text-sm text-slate-500">{subtitle}</p>
+          ) : (
+            // ✅ prevents <p><div/></p> invalid nesting and hydration mismatch
+            <div className="mt-1 text-sm text-slate-500">{subtitle}</div>
+          )
         ) : null}
       </div>
+
       {right}
     </div>
   );
@@ -43,7 +53,7 @@ export function Button({
   variant = "primary",
   ...props
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & {
-   variant?: 'primary' | 'secondary' | 'ghost' | 'danger' | 'destructive';
+  variant?: "primary" | "secondary" | "ghost" | "danger" | "destructive";
 }) {
   const styles =
     variant === "primary"
@@ -78,15 +88,34 @@ export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
   );
 }
 
-export function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
+/**
+ * ✅ Supports both:
+ *  - <Select options={[{value,label}]} ... />
+ *  - <Select> <option/> ... </Select>
+ */
+export function Select(
+  props: React.SelectHTMLAttributes<HTMLSelectElement> & {
+    options?: { value: string; label: string; disabled?: boolean }[];
+  }
+) {
+  const { options, children, ...rest } = props;
+
   return (
     <select
-      {...props}
+      {...rest}
       className={cn(
         "h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none ring-slate-300 focus:ring-2",
         props.className
       )}
-    />
+    >
+      {options
+        ? options.map((o) => (
+            <option key={o.value} value={o.value} disabled={o.disabled}>
+              {o.label}
+            </option>
+          ))
+        : children}
+    </select>
   );
 }
 

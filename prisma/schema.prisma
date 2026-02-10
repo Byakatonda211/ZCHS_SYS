@@ -133,8 +133,10 @@ model Student {
   medicalConditions     String?
   recurrentMedication   String?
   knownDisability       String?
+  residenceSection      ResidenceSection?
   enrollments           Enrollment[]
   marks                 MarkEntry[]
+  
 
   @@index([isActive])
   @@index([lastName, firstName])
@@ -144,18 +146,21 @@ model Student {
 /// * Enrollment ties a student to a class/stream for an academic year.
 /// * (Terms are handled by Term + MarkEntry.termId for termly marks.)
 model Enrollment {
-  id             String       @id @default(uuid())
+  id             String   @id @default(uuid())
   studentId      String
   academicYearId String
   classId        String
   streamId       String?
-  isActive       Boolean      @default(true)
-  createdAt      DateTime     @default(now())
-  academicYear   AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: Cascade)
-  class          Class        @relation(fields: [classId], references: [id])
-  stream         Stream?      @relation(fields: [streamId], references: [id])
-  student        Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  marks          MarkEntry[]
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  student      Student             @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  academicYear AcademicYear        @relation(fields: [academicYearId], references: [id], onDelete: Cascade)
+  class        Class               @relation(fields: [classId], references: [id], onDelete: Cascade)
+  stream       Stream?             @relation(fields: [streamId], references: [id], onDelete: SetNull)
+  subjects     EnrollmentSubject[]
+  markEntries  MarkEntry[]
 
   @@index([studentId])
   @@index([academicYearId])
@@ -166,15 +171,17 @@ model Enrollment {
 /// *
 /// * Subjects & A-Level Papers
 model Subject {
-  id          String               @id @default(uuid())
-  name        String
-  code        String?
-  level       Level
-  isActive    Boolean              @default(true)
-  createdAt   DateTime             @default(now())
-  marks       MarkEntry[]
-  papers      SubjectPaper[]
-  assignments TeachingAssignment[]
+  id                  String               @id @default(uuid())
+  name                String
+  code                String?
+  level               String // assuming you already have this ("O_LEVEL"/"A_LEVEL")
+  isActive            Boolean              @default(true)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  papers              SubjectPaper[]
+  enrollments         EnrollmentSubject[]
+  markEntries         MarkEntry[]
+  teachingAssignments TeachingAssignment[]
 
   @@unique([level, name])
   @@index([level])
@@ -196,17 +203,41 @@ model SubjectPaper {
   @@index([subjectId])
 }
 
+model ReportScheme {
+  id         String                  @id @default(uuid())
+  reportType ReportType              @unique
+  name       String
+  createdAt  DateTime                @default(now())
+  components ReportSchemeComponent[]
+}
+
+model ReportSchemeComponent {
+  id                     String @id @default(uuid())
+  schemeId               String
+  assessmentDefinitionId String
+  weightOutOf            Int
+  order                  Int    @default(1)
+
+  scheme     ReportScheme         @relation(fields: [schemeId], references: [id], onDelete: Cascade)
+  assessment AssessmentDefinition @relation(fields: [assessmentDefinitionId], references: [id], onDelete: Restrict)
+
+  @@unique([schemeId, assessmentDefinitionId])
+  @@index([schemeId])
+  @@index([assessmentDefinitionId])
+}
+
 /// *
 /// * Defines how reports/marks entry work.
 /// * Components store weighting, while teachers always enter raw scores out of 100.
 model AssessmentDefinition {
-  id         String                @id @default(uuid())
-  level      Level
-  type       AssessmentType
-  name       String
-  isActive   Boolean               @default(true)
-  createdAt  DateTime              @default(now())
-  components AssessmentComponent[]
+  id               String                  @id @default(uuid())
+  level            Level
+  type             AssessmentType
+  name             String
+  isActive         Boolean                 @default(true)
+  createdAt        DateTime                @default(now())
+  components       AssessmentComponent[]
+  schemeComponents ReportSchemeComponent[]
 
   @@unique([level, type, name])
   @@index([level, type])
@@ -262,6 +293,19 @@ model MarkEntry {
   @@index([componentId])
 }
 
+model EnrollmentSubject {
+  id           String   @id @default(uuid())
+  enrollmentId String
+  subjectId    String
+  createdAt    DateTime @default(now())
+
+  enrollment Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  subject    Subject    @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@unique([enrollmentId, subjectId])
+  @@index([subjectId])
+}
+
 /// *
 /// * Teaching assignments: who teaches what (and where).
 /// * - Class Teacher can have subjectId = null and isClassTeacher = true
@@ -308,6 +352,11 @@ enum Role {
   SUBJECT_TEACHER
 }
 
+enum ResidenceSection {
+  DAY
+  BOARDING
+}
+
 enum Level {
   O_LEVEL
   A_LEVEL
@@ -317,6 +366,13 @@ enum Gender {
   MALE
   FEMALE
   OTHER
+}
+
+enum ReportType {
+  O_MID
+  O_EOT
+  A_MID
+  A_EOT
 }
 
 enum TermType {

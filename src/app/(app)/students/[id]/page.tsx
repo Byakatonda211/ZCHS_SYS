@@ -47,6 +47,13 @@ type ApiStudent = {
 
 type OptionItem = { id: string; name: string };
 
+// ✅ ADDED: Enrollment subject type (minimal, non-breaking)
+type EnrollmentSubject = {
+  subjectId: string;
+  subject?: { id: string; name: string };
+};
+
+// ✅ UPDATED: Enrollment supports subjects (optional)
 type Enrollment = {
   id: string;
   studentId: string;
@@ -56,6 +63,9 @@ type Enrollment = {
   streamId?: string | null;
   isActive: boolean;
   createdAt?: string;
+
+  // ✅ ADDED
+  subjects?: EnrollmentSubject[];
 };
 
 function Info({ label, value, className }: { label: string; value: React.ReactNode; className?: string }) {
@@ -120,10 +130,17 @@ export default function StudentProfilePage() {
           fetch("/api/settings/streams", { cache: "no-store" }),
         ]);
 
-        const stu = await stuRes.json().catch(() => null);
+        const rawStu = await stuRes.json().catch(() => null);
+        const stuPayload =
+          rawStu && (rawStu as any).student
+            ? (rawStu as any).student
+            : rawStu && (rawStu as any).data
+            ? (rawStu as any).data
+            : rawStu;
+
         if (!stuRes.ok) {
           setStudent(null);
-          setError(stu?.error || "This student record does not exist.");
+          setError((rawStu as any)?.error || "This student record does not exist.");
           return;
         }
 
@@ -137,12 +154,11 @@ export default function StudentProfilePage() {
         setClasses(classes || []);
         setStreams(streams || []);
 
-        setStudent(stu as ApiStudent);
+        setStudent(stuPayload as ApiStudent);
 
-        if ((stu as any)?.enrollments?.length) {
-          setEnrollmentsFromArray((stu as any).enrollments);
+        if ((stuPayload as any)?.enrollments?.length) {
+          setEnrollmentsFromArray((stuPayload as any).enrollments);
         } else {
-          // If enrollments not embedded, we can fetch from another endpoint later.
           setEnrollmentsFromArray([]);
         }
       } catch (e: any) {
@@ -183,6 +199,15 @@ export default function StudentProfilePage() {
   }
 
   const fullName = [student.firstName, student.otherNames, student.lastName].filter(Boolean).join(" ");
+
+  // ✅ ADDED: derive enrolled subjects from active (or latest) enrollment
+  const activeOrLatestEnrollment =
+    (student.enrollments || []).find((e) => e.isActive) || (student.enrollments || [])[0] || null;
+
+  const enrolledSubjects =
+    (activeOrLatestEnrollment?.subjects || [])
+      .map((x) => x?.subject?.name || "")
+      .filter(Boolean) || [];
 
   return (
     <div className="space-y-4">
@@ -280,6 +305,20 @@ export default function StudentProfilePage() {
           <div className="text-sm text-slate-700">
             <span className="font-semibold">Stream:</span> {streamName(currentEnrollment?.streamId)}
           </div>
+
+          {/* ✅ ADDED: Subjects display (minimal, no layout changes elsewhere) */}
+          <div className="sm:col-span-2">
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Subjects</div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {enrolledSubjects.length === 0 ? (
+                <span className="text-sm text-slate-900">—</span>
+              ) : (
+                enrolledSubjects.map((name) => (
+                  <Badge key={name}>{name}</Badge>
+                ))
+              )}
+            </div>
+          </div>
         </div>
 
         {enrollmentHistory.length > 0 ? (
@@ -289,7 +328,8 @@ export default function StudentProfilePage() {
               {enrollmentHistory.map((e) => (
                 <div key={e.id} className="rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-700">
                   <div className="font-semibold text-slate-900">
-                    {yearName(e.academicYearId)} • {className(e.classId)} {e.streamId ? `(${streamName(e.streamId)})` : ""}
+                    {yearName(e.academicYearId)} • {className(e.classId)}{" "}
+                    {e.streamId ? `(${streamName(e.streamId)})` : ""}
                   </div>
                   <div className="mt-1 text-xs text-slate-500">
                     {e.termId ? `Term: ${termName(e.termId)} • ` : ""}

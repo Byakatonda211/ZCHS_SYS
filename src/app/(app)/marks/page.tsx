@@ -2,35 +2,74 @@
 
 import React from "react";
 import {
-  getClasses,
-  getTerms,
-  getAcademicYears,
-  getAssessments,
-  getStudentsInClassCurrent,
-  getSubjectsForClass,
-  getPapersForSubject,
-  upsertMark,
-  getMarks,
   type ClassDef,
   type Term,
   type AcademicYear,
   type AssessmentDef,
   type Subject,
   type SubjectPaper,
-  type Student,
 } from "@/lib/store";
 import { Card, CardHeader, Select, Input, Label, Badge, Button } from "@/components/ui";
 
 function normalizeClassName(name: string) {
-  return name.replace(/\s+/g, "").replace(/\./g, "").toUpperCase(); // "S.5" -> "S5"
+  return name.replace(/\s+/g, "").replace(/\./g, "").toUpperCase();
 }
 function isALevelClass(name: string) {
   const n = normalizeClassName(name);
   return n === "S5" || n === "S6";
 }
 
-function keyFor(studentId: string, subjectId: string, paperId?: string) {
-  return `${studentId}|${subjectId}|${paperId ?? ""}`;
+type StudentRow = {
+  id: string;
+  admissionNo: string | null;
+  firstName: string;
+  lastName: string;
+  otherNames: string | null;
+  classId: string | null;
+  streamId: string | null;
+};
+
+type SavedMarkRow = { studentId: string; scoreRaw: number };
+
+// ✅ IMPORTANT: include assessmentId in key so drafts don't leak across assessments
+function keyFor(studentId: string, assessmentId: string, subjectId: string, paperId?: string) {
+  return `${studentId}|${assessmentId}|${subjectId}|${paperId ?? ""}`;
+}
+
+async function apiGetJSON<T>(url: string): Promise<T> {
+  const res = await fetch(url, { method: "GET" });
+  if (!res.ok) throw new Error(`GET ${url} failed: ${res.status}`);
+  return res.json();
+}
+
+async function apiPostJSON<T>(url: string, body: any): Promise<T> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `POST ${url} failed: ${res.status}`);
+  return data;
+}
+
+// ✅ Sort A–Z by FIRST NAME (then last, other, admission as tie-breakers)
+function compareStudentsByFirstName(a: StudentRow, b: StudentRow) {
+  const aFirst = (a.firstName || "").trim().toLowerCase();
+  const bFirst = (b.firstName || "").trim().toLowerCase();
+  if (aFirst !== bFirst) return aFirst.localeCompare(bFirst);
+
+  const aLast = (a.lastName || "").trim().toLowerCase();
+  const bLast = (b.lastName || "").trim().toLowerCase();
+  if (aLast !== bLast) return aLast.localeCompare(bLast);
+
+  const aOther = (a.otherNames || "").trim().toLowerCase();
+  const bOther = (b.otherNames || "").trim().toLowerCase();
+  if (aOther !== bOther) return aOther.localeCompare(bOther);
+
+  const aAdm = (a.admissionNo || "").trim().toLowerCase();
+  const bAdm = (b.admissionNo || "").trim().toLowerCase();
+  return aAdm.localeCompare(bAdm);
 }
 
 export default function MarksPage() {
@@ -43,22 +82,24 @@ export default function MarksPage() {
   const [termId, setTermId] = React.useState<string>("");
   const [assessmentId, setAssessmentId] = React.useState<string>("");
 
-  const [students, setStudents] = React.useState<Student[]>([]);
+  const [students, setStudents] = React.useState<StudentRow[]>([]);
   const [subjects, setSubjects] = React.useState<Subject[]>([]);
   const [papersBySubject, setPapersBySubject] = React.useState<Record<string, SubjectPaper[]>>({});
 
-  // New: subject-first entry + student search
   const [subjectId, setSubjectId] = React.useState<string>("");
   const [paperId, setPaperId] = React.useState<string>("");
   const [studentQuery, setStudentQuery] = React.useState<string>("");
 
-  // New: inline validation + drafts
   const [errors, setErrors] = React.useState<Record<string, string>>({});
   const [drafts, setDrafts] = React.useState<Record<string, string>>({});
-  const [marksVersion, setMarksVersion] = React.useState(0);
+  const [saving, setSaving] = React.useState(false);
+
+  // saved marks loaded from DB
+  const [savedMap, setSavedMap] = React.useState<Record<string, number>>({});
+  const [savedVersion, setSavedVersion] = React.useState(0);
 
   const currentYear = React.useMemo(
-    () => years.find((y) => y.isCurrent) ?? years[0] ?? null,
+    () => years.find((y: any) => y.isCurrent) ?? years[0] ?? null,
     [years]
   );
 
@@ -67,412 +108,390 @@ export default function MarksPage() {
     [classes, classId]
   );
 
-  const aLevel = selectedClass ? isALevelClass(selectedClass.name) : false;
+  const aLevel = selectedClass ? isALevelClass((selectedClass as any).name) : false;
 
   React.useEffect(() => {
-    const cls = getClasses().sort((a, b) => a.sortOrder - b.sortOrder);
-    const yrs = getAcademicYears();
-    const t = getTerms();
-    const as = getAssessments().filter((x) => x.isActive);
+    let cancelled = false;
 
-    setClasses(cls);
-    setYears(yrs);
-    setTerms(t);
-    setAssessments(as);
+    (async () => {
+      try {
+        const [cls, yrs, t, as] = await Promise.all([
+          apiGetJSON<any[]>("/api/classes"),
+          apiGetJSON<any[]>("/api/academic-years"),
+          apiGetJSON<any[]>("/api/terms"),
+          // ✅ only active assessments for teachers
+          apiGetJSON<any[]>("/api/assessments?activeOnly=1"),
+        ]);
 
-    setClassId(cls[0]?.id ?? "");
-    const ct = t.find((x) => x.isCurrent) ?? t[0];
-    setTermId(ct?.id ?? "");
-    setAssessmentId(as[0]?.id ?? "");
+        if (cancelled) return;
+
+        const clsSorted = (cls || []).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+        const asActive = (as || []).filter((x) => x.isActive !== false);
+
+        setClasses(clsSorted);
+        setYears(yrs || []);
+        setTerms(t || []);
+        setAssessments(asActive);
+
+        setClassId(clsSorted[0]?.id ?? "");
+        const ct = (t || []).find((x: any) => x.isCurrent) ?? (t || [])[0];
+        setTermId(ct?.id ?? "");
+        setAssessmentId(asActive[0]?.id ?? "");
+      } catch {
+        if (cancelled) return;
+        setClasses([]);
+        setYears([]);
+        setTerms([]);
+        setAssessments([]);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   React.useEffect(() => {
     if (!classId) return;
 
-    setStudents(getStudentsInClassCurrent(classId));
+    let cancelled = false;
 
-    const subs = getSubjectsForClass(classId);
-    setSubjects(subs);
+    (async () => {
+      try {
+        const [stu, subs] = await Promise.all([
+          apiGetJSON<StudentRow[]>(`/api/students?classId=${encodeURIComponent(classId)}`),
+          apiGetJSON<Subject[]>(`/api/subjects?classId=${encodeURIComponent(classId)}`),
+        ]);
 
-    const map: Record<string, SubjectPaper[]> = {};
-    subs.forEach((s) => {
-      map[s.id] = getPapersForSubject(s.id);
-    });
-    setPapersBySubject(map);
+        if (cancelled) return;
 
-    // set sensible defaults for subject/paper
-    const firstSub = subs[0]?.id ?? "";
-    setSubjectId(firstSub);
+        setStudents(stu || []);
+        setSubjects(subs || []);
 
-    const firstPaper = firstSub ? (map[firstSub]?.[0]?.id ?? "") : "";
-    setPaperId(firstPaper);
+        const map: Record<string, SubjectPaper[]> = {};
+        for (const s of subs || []) {
+          try {
+            const papers = await apiGetJSON<SubjectPaper[]>(
+              `/api/subjects/${encodeURIComponent(s.id)}/papers`
+            );
+            map[s.id] = papers || [];
+          } catch {
+            map[s.id] = [];
+          }
+        }
 
-    // clear drafts/errors on class change
-    setDrafts({});
-    setErrors({});
-    setStudentQuery("");
+        if (cancelled) return;
+        setPapersBySubject(map);
+
+        const firstSub = (subs || [])[0]?.id ?? "";
+        setSubjectId(firstSub);
+
+        const firstPaper = firstSub ? (map[firstSub]?.[0]?.id ?? "") : "";
+        setPaperId(firstPaper);
+
+        setDrafts({});
+        setErrors({});
+        setStudentQuery("");
+      } catch {
+        if (cancelled) return;
+        setStudents([]);
+        setSubjects([]);
+        setPapersBySubject({});
+        setSubjectId("");
+        setPaperId("");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [classId]);
 
-  // If user changes subject, pick first paper for that subject (A-Level)
   React.useEffect(() => {
     if (!aLevel) return;
     const first = subjectId ? (papersBySubject[subjectId]?.[0]?.id ?? "") : "";
     setPaperId(first);
-    // clear drafts/errors for clarity
-    setDrafts({});
-    setErrors({});
   }, [aLevel, subjectId, papersBySubject]);
 
-  const marks = React.useMemo(() => getMarks(), [marksVersion, classId, termId, assessmentId]);
-
-  function getExistingScore(args: { studentId: string; subjectId: string; paperId?: string }) {
-    if (!currentYear) return "";
-    const found = marks.find(
-      (m) =>
-        m.studentId === args.studentId &&
-        m.academicYearId === currentYear.id &&
-        m.termId === termId &&
-        m.assessmentId === assessmentId &&
-        m.subjectId === args.subjectId &&
-        (m.paperId ?? "") === (args.paperId ?? "")
-    );
-    return found ? String(found.score100) : "";
-  }
-
-  function validateScore(value: string) {
-    const v = value.trim();
-    if (v === "") return { ok: true as const, normalized: "" }; // allow empty (not entered)
-    const n = Number(v);
-    if (!Number.isFinite(n)) return { ok: false as const, message: "Enter a number" };
-    if (n < 0 || n > 100) return { ok: false as const, message: "0–100 only" };
-    return { ok: true as const, normalized: String(n) };
-  }
-
-  function onChangeScore(args: { studentId: string; subjectId: string; paperId?: string; value: string }) {
-    const k = keyFor(args.studentId, args.subjectId, args.paperId);
-    setDrafts((prev) => ({ ...prev, [k]: args.value }));
-
-    const v = validateScore(args.value);
-    setErrors((prev) => {
-      const next = { ...prev };
-      if (v.ok) delete next[k];
-      else next[k] = v.message;
-      return next;
-    });
-  }
-
-  function onBlurScore(args: { studentId: string; subjectId: string; paperId?: string }) {
-    if (!currentYear || !termId || !assessmentId) return;
-    const k = keyFor(args.studentId, args.subjectId, args.paperId);
-
-    const raw = drafts[k] ?? getExistingScore(args);
-    const v = validateScore(raw);
-
-    // If invalid, do not save
-    if (!v.ok) return;
-
-    // Empty => do not save (keep as not-entered)
-    if (v.normalized === "") return;
-
-    upsertMark({
-      studentId: args.studentId,
-      academicYearId: currentYear.id,
-      termId,
-      assessmentId,
-      subjectId: args.subjectId,
-      paperId: args.paperId,
-      score100: Number(v.normalized),
-    });
-
-    // refresh local view (no reload needed)
-    setMarksVersion((x) => x + 1);
-  }
-
-  const selectedSubject = React.useMemo(
-    () => subjects.find((s) => s.id === subjectId) ?? null,
-    [subjects, subjectId]
-  );
-
-  const selectedPaper = React.useMemo(() => {
-    if (!aLevel) return null;
-    const list = subjectId ? papersBySubject[subjectId] ?? [] : [];
-    return list.find((p) => p.id === paperId) ?? null;
-  }, [aLevel, subjectId, papersBySubject, paperId]);
-
+  // ✅ Filter + sort by FIRST NAME A–Z
   const filteredStudents = React.useMemo(() => {
     const q = studentQuery.trim().toLowerCase();
-    if (!q) return students;
 
-    return students.filter((s) => {
-      const full = `${s.firstName} ${s.lastName} ${s.otherName ?? ""}`.toLowerCase();
-      const no = (s.studentNo ?? "").toLowerCase();
-      return full.includes(q) || no.includes(q);
-    });
+    const base = !q
+      ? students
+      : students.filter((s) => {
+          const name = `${s.firstName ?? ""} ${s.lastName ?? ""} ${s.otherNames ?? ""}`.toLowerCase();
+          const adm = `${s.admissionNo ?? ""}`.toLowerCase();
+          return name.includes(q) || adm.includes(q);
+        });
+
+    return base.slice().sort(compareStudentsByFirstName);
   }, [students, studentQuery]);
 
-  const canEnter = Boolean(subjectId) && (!aLevel || Boolean(paperId));
+  function setDraft(k: string, v: string) {
+    setDrafts((d) => ({ ...d, [k]: v }));
+  }
+  function setErr(k: string, msg: string) {
+    setErrors((e) => ({ ...e, [k]: msg }));
+  }
+  function clearErr(k: string) {
+    setErrors((e) => {
+      const copy = { ...e };
+      delete copy[k];
+      return copy;
+    });
+  }
+
+  function validateScore(v: string) {
+    if (!v.trim()) return { ok: true, val: null as number | null };
+    const n = Number(v);
+    if (!Number.isFinite(n)) return { ok: false, msg: "Invalid number" };
+    const i = Math.trunc(n);
+    if (i < 0) return { ok: false, msg: "Too low" };
+    if (i > 100) return { ok: false, msg: "Too high" };
+    return { ok: true, val: i };
+  }
+
+  const draftCountForCurrentSelection = React.useMemo(() => {
+    if (!assessmentId || !subjectId) return 0;
+    const paper = aLevel ? paperId : "";
+    const suffix = `|${assessmentId}|${subjectId}|${paper ?? ""}`;
+    return Object.keys(drafts).filter((k) => k.endsWith(suffix) && drafts[k].trim() !== "").length;
+  }, [drafts, assessmentId, subjectId, paperId, aLevel]);
+
+  // Load saved marks for current selection
+  React.useEffect(() => {
+    const y = currentYear?.id ?? "";
+    if (!y || !termId || !assessmentId || !classId || !subjectId) {
+      setSavedMap({});
+      return;
+    }
+
+    const paper = aLevel ? paperId : "";
+    const subjectPaperId = paper ? paper : "";
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const rows = await apiGetJSON<SavedMarkRow[]>(
+          `/api/marks?academicYearId=${encodeURIComponent(y)}&termId=${encodeURIComponent(
+            termId
+          )}&assessmentDefinitionId=${encodeURIComponent(
+            assessmentId
+          )}&classId=${encodeURIComponent(classId)}&subjectId=${encodeURIComponent(
+            subjectId
+          )}&subjectPaperId=${encodeURIComponent(subjectPaperId)}`
+        );
+
+        if (cancelled) return;
+
+        const map: Record<string, number> = {};
+        for (const r of rows || []) map[r.studentId] = r.scoreRaw;
+        setSavedMap(map);
+      } catch {
+        if (cancelled) return;
+        setSavedMap({});
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentYear?.id, termId, assessmentId, classId, subjectId, paperId, aLevel, savedVersion]);
+
+  async function saveAll() {
+    const y = currentYear?.id ?? "";
+    if (!y || !termId || !assessmentId || !classId || !subjectId) return;
+
+    const paper = aLevel ? paperId : "";
+    const subjectPaperId = paper ? paper : null;
+
+    const entries: { studentId: string; scoreRaw: number }[] = [];
+    const newErrors: Record<string, string> = {};
+
+    for (const s of students) {
+      const k = keyFor(s.id, assessmentId, subjectId, paper || undefined);
+      const raw = drafts[k];
+      if (raw === undefined || raw.trim() === "") continue;
+
+      const chk = validateScore(raw);
+      if (!chk.ok) {
+        newErrors[k] = chk.msg || "Invalid";
+        continue;
+      }
+      if (chk.val === null) continue;
+
+      entries.push({ studentId: s.id, scoreRaw: chk.val });
+    }
+
+    setErrors((prev) => ({ ...prev, ...newErrors }));
+    if (entries.length === 0) return;
+
+    setSaving(true);
+    try {
+      await apiPostJSON("/api/marks/bulk", {
+        academicYearId: y,
+        termId,
+        assessmentDefinitionId: assessmentId,
+        classId,
+        subjectId,
+        subjectPaperId,
+        entries,
+      });
+
+      // clear drafts for current selection only
+      setDrafts((d) => {
+        const copy = { ...d };
+        for (const e of entries) {
+          const k = keyFor(e.studentId, assessmentId, subjectId, paper || undefined);
+          delete copy[k];
+        }
+        return copy;
+      });
+
+      // refresh saved marks so they appear immediately
+      setSavedVersion((v) => v + 1);
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">Enter Marks</h1>
-        <p className="mt-1 text-sm text-slate-600">
-          Teachers enter marks out of <span className="font-semibold">100</span>. Invalid values are rejected.
-        </p>
-      </div>
-
       <Card>
-        <CardHeader title="Selection" subtitle="Choose class, term, assessment, and subject" />
-        <div className="p-5 pt-0 grid grid-cols-1 gap-3 lg:grid-cols-6">
-          <div className="space-y-2 lg:col-span-2">
+        <CardHeader title="Enter Marks" subtitle="Select class, term, assessment & subject then enter marks" />
+        <div className="p-4 grid grid-cols-1 md:grid-cols-6 gap-3">
+          <div className="space-y-1 md:col-span-2">
             <Label>Class</Label>
-            <Select value={classId} onChange={(e) => setClassId(e.target.value)}>
-              {classes.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </Select>
+            <Select
+              value={classId}
+              onChange={(e: any) => setClassId(e.target.value)}
+              options={classes.map((c: any) => ({ value: c.id, label: c.name }))}
+            />
           </div>
 
-          <div className="space-y-2 lg:col-span-2">
+          <div className="space-y-1 md:col-span-1">
             <Label>Term</Label>
-            <Select value={termId} onChange={(e) => setTermId(e.target.value)}>
-              {terms.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </Select>
+            <Select
+              value={termId}
+              onChange={(e: any) => setTermId(e.target.value)}
+              options={terms.map((t: any) => ({ value: t.id, label: t.name }))}
+            />
           </div>
 
-          <div className="space-y-2 lg:col-span-2">
-            <Label>Assessment</Label>
-            <Select value={assessmentId} onChange={(e) => setAssessmentId(e.target.value)}>
-              {assessments.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.code} — {a.name}
-                </option>
-              ))}
-            </Select>
+          <div className="space-y-1 md:col-span-1">
+            <Label>Assessment Type</Label>
+            <Select
+              value={assessmentId}
+              onChange={(e: any) => setAssessmentId(e.target.value)}
+              options={assessments.map((a: any) => ({
+                value: a.id,
+                label: a.code ? `${a.code} — ${a.name}` : a.name,
+              }))}
+            />
           </div>
 
-          <div className="space-y-2 lg:col-span-3">
+          <div className="space-y-1 md:col-span-2">
             <Label>Subject</Label>
-            <Select value={subjectId} onChange={(e) => setSubjectId(e.target.value)}>
-              {subjects.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </Select>
+            <Select
+              value={subjectId}
+              onChange={(e: any) => {
+                const newSub = e.target.value;
+                setSubjectId(newSub);
+                const firstPaper = newSub ? (papersBySubject[newSub]?.[0]?.id ?? "") : "";
+                setPaperId(firstPaper);
+              }}
+              options={subjects.map((s: any) => ({ value: s.id, label: s.name }))}
+            />
           </div>
 
           {aLevel ? (
-            <div className="space-y-2 lg:col-span-3">
+            <div className="space-y-1 md:col-span-2">
               <Label>Paper</Label>
-              <Select value={paperId} onChange={(e) => setPaperId(e.target.value)}>
-                {(papersBySubject[subjectId] ?? []).map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </Select>
-              {(papersBySubject[subjectId] ?? []).length === 0 ? (
-                <div className="text-xs text-amber-700">
-                  No papers set for this subject. Go to Settings → Subjects → Manage Papers.
-                </div>
-              ) : null}
+              <Select
+                value={paperId}
+                onChange={(e: any) => setPaperId(e.target.value)}
+                options={(papersBySubject[subjectId] ?? []).map((p: any) => ({
+                  value: p.id,
+                  label: p.name,
+                }))}
+              />
             </div>
           ) : null}
 
-          <div className="space-y-2 lg:col-span-6">
-            <Label>Search student</Label>
+          <div className="space-y-1 md:col-span-2">
+            <Label>Search Student</Label>
             <Input
               value={studentQuery}
-              onChange={(e) => setStudentQuery(e.target.value)}
-              placeholder="Search by name or student number..."
+              onChange={(e: any) => setStudentQuery(e.target.value)}
+              placeholder="Type name or admission no..."
             />
-            <div className="text-xs text-slate-500 flex items-center justify-between">
-              <span>
-                Level: <span className="font-semibold">{aLevel ? "A-Level (S5/S6)" : "O-Level (other classes)"}</span>
-              </span>
-              <span>
-                Entering:{" "}
-                <span className="font-semibold">
-                  {selectedSubject ? selectedSubject.name : "—"}
-                  {aLevel ? ` → ${selectedPaper ? selectedPaper.name : "—"}` : ""}
-                </span>
-              </span>
-            </div>
           </div>
-
-          {!canEnter ? (
-            <div className="lg:col-span-6 text-sm text-amber-700">
-              Select a {aLevel ? "subject and paper" : "subject"} to begin.
-            </div>
-          ) : null}
         </div>
       </Card>
 
-      {/* Mobile-first: student cards */}
-      <div className="grid grid-cols-1 gap-3 lg:hidden">
-        {filteredStudents.length === 0 ? (
-          <Card className="p-6">
-            <div className="text-sm font-semibold text-slate-900">No students</div>
-            <p className="mt-1 text-sm text-slate-600">No matching students found for your search.</p>
-          </Card>
-        ) : (
-          filteredStudents.map((st) => {
-            const k = keyFor(st.id, subjectId, aLevel ? paperId : undefined);
-            const existing = getExistingScore({ studentId: st.id, subjectId, paperId: aLevel ? paperId : undefined });
-            const value = drafts[k] ?? existing;
-            const err = errors[k];
+      <Card>
+        <CardHeader
+          title="Students"
+          subtitle={
+            <div className="flex items-center gap-2">
+              <Badge>{filteredStudents.length} students</Badge>
+              {draftCountForCurrentSelection > 0 ? (
+                <Badge>{draftCountForCurrentSelection} entered</Badge>
+              ) : null}
+            </div>
+          }
+        />
+        <div className="p-4 space-y-2">
+          {filteredStudents.map((s) => {
+            const paper = aLevel ? paperId : "";
+            const k = keyFor(s.id, assessmentId, subjectId, paper || undefined);
+
+            const display =
+              drafts[k] !== undefined
+                ? drafts[k]
+                : savedMap[s.id] !== undefined
+                ? String(savedMap[s.id])
+                : "";
 
             return (
-              <Card key={st.id} className="p-5 space-y-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-extrabold text-slate-900">
-                      {st.firstName} {st.lastName}
-                    </div>
-                    <div className="text-xs text-slate-500">{st.studentNo}</div>
+              <div key={s.id} className="flex items-center gap-3 border rounded p-2">
+                <div className="flex-1">
+                  <div className="font-semibold text-slate-900">
+                    {/* ✅ Hide admission number on small screens, show on md+ */}
+                    {s.admissionNo ? <span className="hidden md:inline">{s.admissionNo} — </span> : null}
+                    {s.firstName} {s.lastName} {s.otherNames ?? ""}
                   </div>
-                  <Badge>{st.status}</Badge>
                 </div>
 
-                <div className="space-y-1">
-                  <Label>
-                    Mark (/100) — {selectedSubject?.name}
-                    {aLevel ? ` (${selectedPaper?.name ?? "Paper"})` : ""}
-                  </Label>
+                <div className="w-32">
                   <Input
-                    type="number"
-                    min={0}
-                    max={100}
-                    value={value}
-                    onChange={(e) =>
-                      onChangeScore({
-                        studentId: st.id,
-                        subjectId,
-                        paperId: aLevel ? paperId : undefined,
-                        value: e.target.value,
-                      })
-                    }
-                    onBlur={() =>
-                      onBlurScore({
-                        studentId: st.id,
-                        subjectId,
-                        paperId: aLevel ? paperId : undefined,
-                      })
-                    }
-                    placeholder="0 - 100"
-                    className={err ? "border-red-500 focus:border-red-500 focus:ring-red-200" : ""}
+                    value={display}
+                    onChange={(e: any) => {
+                      setDraft(k, e.target.value);
+                      const chk = validateScore(e.target.value);
+                      if (!chk.ok) setErr(k, chk.msg || "Invalid");
+                      else clearErr(k);
+                    }}
+                    placeholder=""
                   />
-                  {err ? <div className="text-xs text-red-600">{err}</div> : null}
+                  {errors[k] ? <div className="text-xs text-red-600 mt-1">{errors[k]}</div> : null}
                 </div>
-              </Card>
+              </div>
             );
-          })
-        )}
-      </div>
+          })}
+        </div>
 
-      {/* Desktop table */}
-      <div className="hidden lg:block">
-        <Card>
-          <CardHeader
-            title="Marks Table"
-            subtitle="Subject-first entry (fast for large classes)"
-            right={
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setDrafts({});
-                  setErrors({});
-                  setMarksVersion((x) => x + 1);
-                }}
-              >
-                Refresh
-              </Button>
-            }
-          />
-          <div className="p-5 pt-0 overflow-auto">
-            {filteredStudents.length === 0 ? (
-              <div className="text-sm text-slate-600">No matching students found.</div>
-            ) : !canEnter ? (
-              <div className="text-sm text-slate-600">Select a subject (and paper for A-Level) to start.</div>
-            ) : (
-              <table className="w-full text-sm">
-                <thead className="text-left text-slate-600">
-                  <tr>
-                    <th className="py-2 pr-4">Student</th>
-                    <th className="py-2 pr-4 whitespace-nowrap">
-                      Mark (/100) — {selectedSubject?.name}
-                      {aLevel ? ` (${selectedPaper?.name ?? "Paper"})` : ""}
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredStudents.map((st) => {
-                    const k = keyFor(st.id, subjectId, aLevel ? paperId : undefined);
-                    const existing = getExistingScore({
-                      studentId: st.id,
-                      subjectId,
-                      paperId: aLevel ? paperId : undefined,
-                    });
-                    const value = drafts[k] ?? existing;
-                    const err = errors[k];
-
-                    return (
-                      <tr key={st.id} className="border-t border-slate-200">
-                        <td className="py-2 pr-4">
-                          <div className="font-semibold text-slate-900">
-                            {st.firstName} {st.lastName}
-                          </div>
-                          <div className="text-xs text-slate-500">{st.studentNo}</div>
-                        </td>
-
-                        <td className="py-2 pr-4">
-                          <div className="flex items-center gap-3">
-                            <Input
-                              type="number"
-                              min={0}
-                              max={100}
-                              value={value}
-                              onChange={(e) =>
-                                onChangeScore({
-                                  studentId: st.id,
-                                  subjectId,
-                                  paperId: aLevel ? paperId : undefined,
-                                  value: e.target.value,
-                                })
-                              }
-                              onBlur={() =>
-                                onBlurScore({
-                                  studentId: st.id,
-                                  subjectId,
-                                  paperId: aLevel ? paperId : undefined,
-                                })
-                              }
-                              className={`w-28 ${err ? "border-red-500 focus:border-red-500 focus:ring-red-200" : ""}`}
-                              placeholder="0-100"
-                            />
-                            {err ? <span className="text-xs text-red-600">{err}</span> : null}
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )}
-          </div>
-
-          <div className="p-5 pt-0 text-xs text-slate-500">
-            Marks are saved automatically when a value is valid and you leave the input. Invalid values are not saved.
-          </div>
-        </Card>
-      </div>
+        <div className="p-4 pt-0 flex justify-end">
+          <Button
+            onClick={saveAll}
+            disabled={saving || draftCountForCurrentSelection === 0 || !assessmentId}
+          >
+            {saving ? "Saving..." : "Save All"}
+          </Button>
+        </div>
+      </Card>
     </div>
   );
 }

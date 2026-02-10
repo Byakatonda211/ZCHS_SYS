@@ -2,6 +2,12 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin, requireUser } from "@/lib/auth";
 
+function asId(v: any): string | null {
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  return s ? s : null;
+}
+
 export async function GET() {
   try {
     const user = await requireUser();
@@ -31,17 +37,33 @@ export async function POST(req: Request) {
     requireAdmin(user);
 
     const body = await req.json();
-    const userId = String(body?.userId || "");
-    const classId = String(body?.classId || "");
-    const streamId = body?.streamId ? String(body.streamId) : null;
-    const subjectId = body?.subjectId ? String(body.subjectId) : null;
+
+    // Accept both "userId" and "teacherId" (UI uses teacherId)
+    const userId = asId(body?.userId) || asId(body?.teacherId);
+    const classId = asId(body?.classId);
+    const streamId = asId(body?.streamId);
+    const subjectIdRaw = asId(body?.subjectId);
     const isClassTeacher = Boolean(body?.isClassTeacher);
 
-    if (!userId || !classId) return NextResponse.json({ error: "Missing userId/classId" }, { status: 400 });
-    if (!isClassTeacher && !subjectId) return NextResponse.json({ error: "Subject required unless Class Teacher" }, { status: 400 });
+    if (!userId || !classId) {
+      return NextResponse.json({ error: "Missing userId/classId" }, { status: 400 });
+    }
+
+    if (!isClassTeacher && !subjectIdRaw) {
+      return NextResponse.json(
+        { error: "Subject required unless Class Teacher" },
+        { status: 400 }
+      );
+    }
 
     const created = await prisma.teachingAssignment.create({
-      data: { userId, classId, streamId, subjectId: isClassTeacher ? null : subjectId, isClassTeacher },
+      data: {
+        userId,
+        classId,
+        streamId,
+        subjectId: isClassTeacher ? null : subjectIdRaw,
+        isClassTeacher,
+      },
     });
 
     return NextResponse.json(created);

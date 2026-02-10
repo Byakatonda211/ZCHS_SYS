@@ -1519,3 +1519,40 @@ export function pickRemark(args: {
 
   return "";
 }
+
+// ✅ NEW: Sync a single mark to DB via /api/marks/bulk (does NOT replace localStorage saving)
+// NOTE: This function is safe to call even if API fails (it will not throw).
+export function syncMarkToDb(args: {
+  classId: string;
+  studentId: string;
+  academicYearId: string;
+  termId: string;
+  assessmentId: string; // maps to assessmentDefinitionId in API
+  subjectId: string;
+  paperId?: string;
+  score100: number;
+}) {
+  try {
+    if (typeof window === "undefined") return;
+    const classId = String(args.classId || "").trim();
+    if (!classId) return;
+
+    // fire-and-forget; do not block UI
+    fetch("/api/marks/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        academicYearId: args.academicYearId,
+        termId: args.termId,
+        assessmentDefinitionId: args.assessmentId,
+        classId,
+        subjectId: args.subjectId,
+        subjectPaperId: args.paperId ? args.paperId : null,
+        marks: [{ studentId: args.studentId, scoreRaw: Number(args.score100) }],
+      }),
+    }).catch(() => {});
+  } catch {
+    // never throw from store helpers
+  }
+}
+

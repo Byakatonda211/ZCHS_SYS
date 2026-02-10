@@ -2,65 +2,29 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 
-function normalizeStudentForUI(student: any) {
-  const latest = student?.enrollments?.[0] || null;
+type Ctx = { params: Promise<{ id: string }> };
 
-  return {
-    ...student,
-
-    // Helpful UI-friendly fields
-    academicYearId: latest?.academicYearId ?? null,
-    academicYearName: latest?.academicYear?.name ?? null,
-
-    classId: latest?.classId ?? null,
-    className: latest?.class?.name ?? null,
-
-    streamId: latest?.streamId ?? null,
-    streamName: latest?.stream?.name ?? null,
-
-    enrollmentId: latest?.id ?? null,
-  };
-}
-
-// ---- Helpers for safe coercion (DOES NOT change UI) ----
-function trimOrNull(v: any) {
-  if (v === undefined) return undefined;
-  if (v === null) return null;
-  const s = String(v).trim();
-  return s === "" ? null : s;
-}
-
-function intOrNull(v: any) {
-  if (v === undefined) return undefined; // means “don’t update”
-  if (v === null) return null;
-
-  // Accept numbers or numeric strings
-  if (typeof v === "number") return Number.isFinite(v) ? Math.trunc(v) : null;
-
-  const s = String(v).trim();
-  if (s === "") return null;
-
-  const n = Number(s);
-  if (!Number.isFinite(n)) return null;
-  return Math.trunc(n);
-}
-
-export async function GET(
-  _req: Request,
-  ctx: { params: Promise<{ id: string }> }
-) {
+export async function GET(_req: Request, ctx: Ctx) {
   try {
     await requireUser();
+
     const { id } = await ctx.params;
+    const cleanId = String(id || "").trim();
+
+    if (!cleanId) {
+      return NextResponse.json({ error: "Missing id" }, { status: 400 });
+    }
 
     const student = await prisma.student.findUnique({
-      where: { id },
+      where: { id: cleanId },
       include: {
         enrollments: {
-          where: { isActive: true },
-          include: { class: true, stream: true, academicYear: true },
           orderBy: { createdAt: "desc" },
-          take: 1,
+          include: {
+            class: true,
+            stream: true,
+            subjects: { include: { subject: true } },
+          },
         },
       },
     });
@@ -69,109 +33,127 @@ export async function GET(
       return NextResponse.json({ error: "Student not found" }, { status: 404 });
     }
 
-    const shaped = normalizeStudentForUI(student);
-
-    // ✅ Backward compatible: top-level fields + wrapped fields
-    return NextResponse.json({
-      ...shaped,
-      student: shaped,
-      data: shaped,
-    });
+    return NextResponse.json({ student });
   } catch (e: any) {
-    return NextResponse.json(
-      { error: e?.message || "Failed to load student" },
-      { status: 500 }
-    );
+    const msg = e?.message || "Error";
+    const code = msg === "UNAUTHENTICATED" ? 401 : 500;
+    return NextResponse.json({ error: msg }, { status: code });
   }
 }
 
-export async function PATCH(
-  req: Request,
-  ctx: { params: Promise<{ id: string }> }
-) {
+export async function PATCH(req: Request, ctx: Ctx) {
   try {
     await requireUser();
+
     const { id } = await ctx.params;
+    const cleanId = String(id || "").trim();
 
-    const body = await req.json();
+    if (!cleanId) {
+      return NextResponse.json({ error: "Missing id" }, { status: 400 });
+    }
 
-    const updated = await prisma.student.update({
-      where: { id },
-      data: {
-        admissionNo: trimOrNull(body?.admissionNo),
-        firstName: body?.firstName ?? undefined,
-        lastName: body?.lastName ?? undefined,
-        otherNames: trimOrNull(body?.otherNames),
+    const body = await req.json().catch(() => ({}));
 
-        gender: body?.gender ?? undefined,
-        dateOfBirth: body?.dateOfBirth ? new Date(body.dateOfBirth) : undefined,
+    // NEW: residence section (optional)
+    const residenceSectionRaw = String(body?.residenceSection ?? "").trim();
+    const residenceSection =
+      residenceSectionRaw === "DAY" || residenceSectionRaw === "BOARDING" ? residenceSectionRaw : null;
 
-        phone: trimOrNull(body?.phone),
-        email: trimOrNull(body?.email),
-        address: trimOrNull(body?.address),
+    // NEW: enrolled subject ids (optional)
+    const enrolledSubjectIdsRaw = Array.isArray(body?.enrolledSubjectIds) ? body.enrolledSubjectIds : null;
+    const enrolledSubjectIds =
+      enrolledSubjectIdsRaw != null
+        ? enrolledSubjectIdsRaw.map((x: any) => String(x || "").trim()).filter(Boolean)
+        : null;
 
-        guardianName: trimOrNull(body?.guardianName),
-        guardianPhone: trimOrNull(body?.guardianPhone),
-        guardianEmail: trimOrNull(body?.guardianEmail),
+    const admissionNoRaw = String(body?.admissionNo ?? body?.studentNo ?? "").trim();
 
-        // ✅ FIX: coerce numeric strings to Int
-        pleSittingYear: intOrNull(body?.pleSittingYear),
-        plePrimarySchool: trimOrNull(body?.plePrimarySchool),
-        pleIndexNumber: trimOrNull(body?.pleIndexNumber),
-        pleAggregates: intOrNull(body?.pleAggregates),
-        pleDivision: trimOrNull(body?.pleDivision),
+    const result = await prisma.$transaction(async (tx) => {
+      const updated = await tx.student.update({
+        where: { id: cleanId },
+        data: {
+          admissionNo: admissionNoRaw || null,
+          firstName: body?.firstName?.toString().trim() || undefined,
+          lastName: body?.lastName?.toString().trim() || undefined,
+          otherNames: body?.otherNames ?? body?.otherName ?? null,
 
-        village: trimOrNull(body?.village),
-        parish: trimOrNull(body?.parish),
-        districtOfResidence: trimOrNull(body?.districtOfResidence),
-        homeDistrict: trimOrNull(body?.homeDistrict),
+          gender:
+            body?.gender === "Male"
+              ? "MALE"
+              : body?.gender === "Female"
+              ? "FEMALE"
+              : body?.gender === "Other"
+              ? "OTHER"
+              : body?.gender ?? null,
 
-        emergencyContactName: trimOrNull(body?.emergencyContactName),
-        emergencyContactPhone: trimOrNull(body?.emergencyContactPhone),
+          dateOfBirth: body?.dateOfBirth ? new Date(body.dateOfBirth) : null,
 
-        medicalConditions: trimOrNull(body?.medicalConditions),
-        recurrentMedication: trimOrNull(body?.recurrentMedication),
-        knownDisability: trimOrNull(body?.knownDisability),
-      } as any, // (keeps TS quiet if your client types lag behind schema)
-    });
+          phone: body?.phone ?? null,
+          email: body?.email ?? null,
+          address: body?.address ?? null,
 
-    return NextResponse.json({
-      ...updated,
-      student: updated,
-      data: updated,
-    });
-  } catch (e: any) {
-    return NextResponse.json(
-      { error: e?.message || "Failed to update student" },
-      { status: 500 }
-    );
-  }
-}
+          guardianName: body?.guardianName ?? null,
+          guardianPhone: body?.guardianPhone ?? null,
+          guardianEmail: body?.guardianEmail ?? null,
 
-export async function DELETE(
-  _req: Request,
-  ctx: { params: Promise<{ id: string }> }
-) {
-  try {
-    await requireUser();
-    const { id } = await ctx.params;
+          religion: body?.religion ?? null,
+          nationality: body?.nationality ?? null,
+          medicalNotes: body?.medicalNotes ?? null,
 
-    await prisma.$transaction(async (tx) => {
-      await tx.enrollment.updateMany({
-        where: { studentId: id, isActive: true },
-        data: { isActive: false },
+          pleSittingYear: body?.pleSittingYear ? Number(body.pleSittingYear) : null,
+          plePrimarySchool: body?.plePrimarySchool ?? null,
+          pleIndexNumber: body?.pleIndexNumber ?? null,
+          pleAggregates: body?.pleAggregates ? Number(body.pleAggregates) : null,
+          pleDivision: body?.pleDivision ?? null,
+
+          village: body?.village ?? null,
+          parish: body?.parish ?? null,
+          districtOfResidence: body?.districtOfResidence ?? null,
+          homeDistrict: body?.homeDistrict ?? null,
+          emergencyContactName: body?.emergencyContactName ?? null,
+          emergencyContactPhone: body?.emergencyContactPhone ?? null,
+
+          medicalConditions: body?.medicalConditions ?? null,
+          recurrentMedication: body?.recurrentMedication ?? null,
+          knownDisability: body?.knownDisability ?? null,
+
+          // NEW
+          residenceSection,
+        },
       });
-      await tx.student.update({
-        where: { id },
-        data: { isActive: false },
-      });
+
+      // NEW: if enrolledSubjectIds provided, update active enrollment subjects (optional)
+      if (enrolledSubjectIds !== null) {
+        const activeEnrollment = await tx.enrollment.findFirst({
+          where: { studentId: cleanId, isActive: true },
+          orderBy: { createdAt: "desc" },
+          select: { id: true },
+        });
+
+        if (activeEnrollment) {
+          await tx.enrollmentSubject.deleteMany({
+            where: { enrollmentId: activeEnrollment.id },
+          });
+
+          if (enrolledSubjectIds.length > 0) {
+            await tx.enrollmentSubject.createMany({
+              data: enrolledSubjectIds.map((subjectId: string) => ({
+                enrollmentId: activeEnrollment.id,
+                subjectId,
+              })),
+              skipDuplicates: true,
+            });
+          }
+        }
+      }
+
+      return updated;
     });
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ student: result });
   } catch (e: any) {
-    return NextResponse.json(
-      { error: e?.message || "Failed to delete student" },
-      { status: 500 }
-    );
+    const msg = e?.message || "Error";
+    const code = msg === "UNAUTHENTICATED" ? 401 : 500;
+    return NextResponse.json({ error: msg }, { status: code });
   }
 }
