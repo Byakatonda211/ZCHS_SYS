@@ -38,6 +38,7 @@ export async function POST(req: Request) {
     const assessmentDefinitionId = String(body?.assessmentDefinitionId || "").trim();
     const classId = String(body?.classId || "").trim();
     const subjectId = String(body?.subjectId || "").trim();
+
     const subjectPaperId =
       body?.subjectPaperId !== null &&
       body?.subjectPaperId !== undefined &&
@@ -69,13 +70,17 @@ export async function POST(req: Request) {
 
       for (const m of marks) {
         const studentId = String(m?.studentId || "").trim();
-        const scoreRaw = m?.scoreRaw;
+        const raw = m?.scoreRaw;
 
         if (!studentId) continue;
-        if (scoreRaw !== null && scoreRaw !== "" && scoreRaw !== undefined) {
-          const n = Number(scoreRaw);
-          if (!isInt0to100(n)) continue;
-        }
+
+        // Normalize scoreRaw to number|null (and validate 0..100 integers)
+        // Score is required by schema (Int). If blank/invalid, skip this mark row.
+        if (raw === null || raw === "" || raw === undefined) continue;
+
+        const scoreRaw = Number(raw);
+        if (!isInt0to100(scoreRaw)) continue;
+
 
         const enrollment = await tx.enrollment.findFirst({
           where: {
@@ -89,30 +94,75 @@ export async function POST(req: Request) {
 
         if (!enrollment) continue;
 
-        const row = await tx.markEntry.upsert({
-          where: {
-            enrollmentId_componentId_subjectId_subjectPaperId: {
+        // Prisma's WhereUniqueInput for a named composite unique can still require non-null fields.
+        // So: use upsert only when subjectPaperId is a string; otherwise do findFirst -> update/create.
+        let row: any;
+
+        if (subjectPaperId) {
+          row = await tx.markEntry.upsert({
+            where: {
+              term_enroll_subject_paper_component: {
+                termId,
+                enrollmentId: enrollment.id,
+                subjectId,
+                subjectPaperId,
+                componentId: component.id,
+              },
+            },
+            update: {
+              academicYearId,
+              termId,
+              scoreRaw,
+            },
+            create: {
+              academicYearId,
+              termId,
               enrollmentId: enrollment.id,
+              studentId, // ✅ add this
               componentId: component.id,
               subjectId,
               subjectPaperId,
+              scoreRaw,
             },
-          },
-          update: {
-            academicYearId,
-            termId,
-            scoreRaw: scoreRaw === "" ? null : scoreRaw,
-          },
-          create: {
-            academicYearId,
-            termId,
-            enrollmentId: enrollment.id,
-            componentId: component.id,
-            subjectId,
-            subjectPaperId,
-            scoreRaw: scoreRaw === "" ? null : scoreRaw,
-          },
-        });
+
+          });
+        } else {
+          const existing = await tx.markEntry.findFirst({
+            where: {
+              termId,
+              enrollmentId: enrollment.id,
+              subjectId,
+              componentId: component.id,
+              subjectPaperId: null,
+            },
+            select: { id: true },
+          });
+
+          if (existing) {
+            row = await tx.markEntry.update({
+              where: { id: existing.id },
+              data: {
+                academicYearId,
+                termId,
+                scoreRaw,
+              },
+            });
+          } else {
+            row = await tx.markEntry.create({
+              data: {
+                academicYearId,
+                termId,
+                enrollmentId: enrollment.id,
+                studentId, // ✅ add this
+                componentId: component.id,
+                subjectId,
+                subjectPaperId: null,
+                scoreRaw,
+              },
+           });
+
+          }
+        }
 
         out.push(row);
       }

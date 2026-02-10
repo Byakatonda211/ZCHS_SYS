@@ -58,59 +58,59 @@ export async function GET(req: Request) {
                 ],
               }
             : {},
-          classId || streamId || subjectId
+          classId
+            ? {
+                enrollments: {
+                  some: {
+                    classId,
+                    isActive: true,
+                  },
+                },
+              }
+            : {},
+          streamId
+            ? {
+                enrollments: {
+                  some: {
+                    streamId,
+                    isActive: true,
+                  },
+                },
+              }
+            : {},
+          subjectId
             ? {
                 enrollments: {
                   some: {
                     isActive: true,
-                    ...(classId ? { classId } : {}),
-                    ...(streamId ? { streamId } : {}),
-                    ...(subjectId
-                      ? {
-                          subjects: {
-                            some: { subjectId },
-                          },
-                        }
-                      : {}),
+                    subjects: {
+                      some: { subjectId },
+                    },
                   },
                 },
               }
             : {},
         ],
       },
+      orderBy: [{ createdAt: "desc" }],
       include: {
         enrollments: {
           where: { isActive: true },
-          include: { class: true, stream: true },
-          take: 1,
-          orderBy: { createdAt: "desc" },
+          include: {
+            class: true,
+            stream: true,
+            academicYear: true,
+            subjects: { include: { subject: true } },
+          },
         },
       },
-      orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
-      take: 500,
     });
 
-    return NextResponse.json(
-      students.map((s) => {
-        const e = s.enrollments?.[0];
-        return {
-          id: s.id,
-          admissionNo: s.admissionNo,
-          firstName: s.firstName,
-          lastName: s.lastName,
-          otherNames: s.otherNames,
-          gender: s.gender,
-          classId: e?.classId ?? null,
-          className: e?.class?.name ?? null,
-          streamId: e?.streamId ?? null,
-          streamName: e?.stream?.name ?? null,
-          residenceSection: (s as any).residenceSection ?? null,
-        };
-      })
-    );
+    return NextResponse.json(students);
   } catch (e: any) {
-    const code = e?.message === "UNAUTHENTICATED" ? 401 : 500;
-    return NextResponse.json({ error: e?.message || "Error" }, { status: code });
+    const msg = e?.message || "Error";
+    const code = msg === "UNAUTHENTICATED" ? 401 : 500;
+    return NextResponse.json({ error: msg }, { status: code });
   }
 }
 
@@ -119,21 +119,13 @@ export async function POST(req: Request) {
     await requireUser();
     const body = await req.json();
 
-    // ✅ subjects from UI (optional)
-    const enrolledSubjectIds = toStringArray(body?.enrolledSubjectIds);
-
-    // Student fields
-    const rawAdmission = body?.admissionNo ? String(body.admissionNo).trim() : "";
-    const admissionNo = rawAdmission && !rawAdmission.endsWith("-") ? rawAdmission : undefined;
-
+    // Student core fields
+    const admissionNo = toStrOrNull(body?.admissionNo);
     const firstName = String(body?.firstName || "").trim();
     const lastName = String(body?.lastName || "").trim();
     const otherNames = toStrOrNull(body?.otherNames);
-
     const gender = toStrOrNull(body?.gender);
-
-    const dateOfBirth = body?.dateOfBirth ? new Date(String(body.dateOfBirth)) : null;
-
+    const dateOfBirth = body?.dateOfBirth ? new Date(body.dateOfBirth) : null;
     const phone = toStrOrNull(body?.phone);
     const email = toStrOrNull(body?.email);
     const address = toStrOrNull(body?.address);
@@ -146,23 +138,26 @@ export async function POST(req: Request) {
     const nationality = toStrOrNull(body?.nationality);
     const medicalNotes = toStrOrNull(body?.medicalNotes);
 
+    // PLE fields
     const pleSittingYear = toIntOrNull(body?.pleSittingYear);
     const plePrimarySchool = toStrOrNull(body?.plePrimarySchool);
     const pleIndexNumber = toStrOrNull(body?.pleIndexNumber);
     const pleAggregates = toIntOrNull(body?.pleAggregates);
     const pleDivision = toStrOrNull(body?.pleDivision);
 
+    // Residence / extras
     const village = toStrOrNull(body?.village);
     const parish = toStrOrNull(body?.parish);
     const districtOfResidence = toStrOrNull(body?.districtOfResidence);
     const homeDistrict = toStrOrNull(body?.homeDistrict);
+
     const emergencyContactName = toStrOrNull(body?.emergencyContactName);
     const emergencyContactPhone = toStrOrNull(body?.emergencyContactPhone);
-
     const medicalConditions = toStrOrNull(body?.medicalConditions);
     const recurrentMedication = toStrOrNull(body?.recurrentMedication);
     const knownDisability = toStrOrNull(body?.knownDisability);
 
+    // NEW: Residence Section (DAY | BOARDING)
     const residenceSectionRaw = String(body?.residenceSection ?? "").trim();
     const residenceSection =
       residenceSectionRaw === "DAY" || residenceSectionRaw === "BOARDING" ? residenceSectionRaw : null;
@@ -171,7 +166,9 @@ export async function POST(req: Request) {
     const classId = String(body?.classId || "").trim();
     const streamId = toStrOrNull(body?.streamId);
     const academicYearId = String(body?.academicYearId || "").trim();
-    const termId = toStrOrNull(body?.termId);
+
+    // Selected subjects (optional)
+    const enrolledSubjectIds = toStringArray(body?.enrolledSubjectIds);
 
     if (!firstName || !lastName || !classId || !academicYearId) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
@@ -232,7 +229,6 @@ export async function POST(req: Request) {
           classId,
           streamId: streamId || null,
           academicYearId,
-          termId: termId || null,
           isActive: true,
         },
       });
@@ -248,16 +244,17 @@ export async function POST(req: Request) {
         });
       }
 
-      return { student };
+      return { studentId: student.id, enrollmentId: enrollment.id };
     });
 
-    if ((created as any).error) {
-      return NextResponse.json({ error: (created as any).error }, { status: 409 });
+    if ((created as any)?.error) {
+      return NextResponse.json({ error: (created as any).error }, { status: 400 });
     }
 
-    return NextResponse.json((created as any).student, { status: 201 });
+    return NextResponse.json(created, { status: 201 });
   } catch (e: any) {
-    const code = e?.message === "UNAUTHENTICATED" ? 401 : 500;
-    return NextResponse.json({ error: e?.message || "Error" }, { status: code });
+    const msg = e?.message || "Error";
+    const code = msg === "UNAUTHENTICATED" ? 401 : 500;
+    return NextResponse.json({ error: msg }, { status: code });
   }
 }

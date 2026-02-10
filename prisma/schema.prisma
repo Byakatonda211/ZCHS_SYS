@@ -285,7 +285,7 @@ model MarkEntry {
   subjectPaper    SubjectPaper?       @relation(fields: [subjectPaperId], references: [id])
   term            Term                @relation(fields: [termId], references: [id], onDelete: Cascade)
 
-  @@unique([termId, enrollmentId, subjectId, subjectPaperId, componentId])
+  @@unique([termId, enrollmentId, subjectId, subjectPaperId, componentId], name: "term_enroll_subject_paper_component")
   @@index([studentId])
   @@index([enrollmentId])
   @@index([subjectId, subjectPaperId])
