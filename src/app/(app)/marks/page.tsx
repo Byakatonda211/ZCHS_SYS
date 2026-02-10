@@ -320,9 +320,9 @@ export default function MarksPage() {
         newErrors[k] = chk.msg || "Invalid";
         continue;
       }
-      if (chk.val === null) continue;
+      if (chk.val === null || chk.val === undefined) continue;
 
-      entries.push({ studentId: s.id, scoreRaw: chk.val });
+      entries.push({ studentId: s.id, scoreRaw: chk.val ?? 0 });
     }
 
     setErrors((prev) => ({ ...prev, ...newErrors }));
