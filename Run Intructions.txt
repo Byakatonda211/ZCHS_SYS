@@ -20,6 +20,7 @@ http://localhost:5555
 DATABASE_URL="postgresql://postgres:dyIgelDFTMlVNZQjHNwzdsaOgujtCtqO@hopper.proxy.rlwy.net:53880/railway"
 DATABASE_URL="postgresql://sis:sispassword@localhost:5432/sis_db"
 
+DATABASE_URL="postgresql://postgres:bTZSCWmQlLynSwgIKoNpeczWtPpqYpOz@hopper.proxy.rlwy.net:19414/railway"
 
 
 On Add Student page, Under Enrollment -> We need to specify the subjects a student offers, these are the only subjects where the student can be awarded marks -> When Entering marks, filters by subjects will be made to make sure only students under a given enrolled subject can be given marks in that subject.

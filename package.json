@@ -1,3 +1,7 @@
+"prisma": {
+  "seed": "node seed.js"
+}
+
 {
   "name": "sis-frontend",
   "version": "0.1.0",
