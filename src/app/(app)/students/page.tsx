@@ -151,6 +151,37 @@ export default function StudentsPage() {
     }
   }
 
+  async function printClassListPdf() {
+    try {
+      const params = new URLSearchParams();
+      if (debouncedQ.trim()) params.set("q", debouncedQ.trim());
+      if (classFilter) params.set("classId", classFilter);
+      if (streamFilter) params.set("streamId", streamFilter);
+
+      const url = params.toString()
+        ? `/api/print/students?${params.toString()}`
+        : "/api/print/students";
+
+      const res = await fetch(url, { method: "GET" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.error || `Failed to generate PDF (${res.status})`);
+      }
+
+      const blob = await res.blob();
+      const objectUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      a.download = "class_list.pdf";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(objectUrl);
+    } catch (e: any) {
+      alert(e?.message || "Failed to generate PDF");
+    }
+  }
+
   // Alphabetical order A-Z based on firstName
   const sortedRows = React.useMemo(() => {
     const copy = [...rows];
@@ -170,10 +201,15 @@ export default function StudentsPage() {
           <p className="text-sm text-slate-600">Search and manage students</p>
         </div>
 
-        {/* Hide Add Student for non-admins */}
-        {isAdmin ? (
-          <Button onClick={() => router.push("/students/new")}>+ Add Student</Button>
-        ) : null}
+        <div className="flex items-center gap-2">
+          {/* Accessible to all roles */}
+          <Button onClick={printClassListPdf}>Print</Button>
+
+          {/* Hide Add Student for non-admins */}
+          {isAdmin ? (
+            <Button onClick={() => router.push("/students/new")}>+ Add Student</Button>
+          ) : null}
+        </div>
       </div>
 
       <Card>

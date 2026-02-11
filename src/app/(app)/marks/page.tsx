@@ -213,7 +213,37 @@ export default function MarksPage() {
     setPaperId(first);
   }, [aLevel, subjectId, papersBySubject]);
 
-  // ✅ Filter + sort by FIRST NAME A–Z
+  
+  // ✅ Re-fetch students filtered by selected subject (only enrolled students should appear)
+  // NOTE: No UI changes — just data filtering via existing /api/students?subjectId=
+  React.useEffect(() => {
+    if (!classId) return;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const url =
+          subjectId && subjectId.trim()
+            ? `/api/students?classId=${encodeURIComponent(classId)}&subjectId=${encodeURIComponent(subjectId)}`
+            : `/api/students?classId=${encodeURIComponent(classId)}`;
+
+        const stu = await apiGetJSON<StudentRow[]>(url);
+        if (cancelled) return;
+        setStudents(stu || []);
+      } catch {
+        if (cancelled) return;
+        // keep behavior safe: show none if fetch fails
+        setStudents([]);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [classId, subjectId]);
+
+// ✅ Filter + sort by FIRST NAME A–Z
   const filteredStudents = React.useMemo(() => {
     const q = studentQuery.trim().toLowerCase();
 

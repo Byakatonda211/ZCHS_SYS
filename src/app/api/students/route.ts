@@ -96,6 +96,8 @@ export async function GET(req: Request) {
       include: {
         enrollments: {
           where: { isActive: true },
+          orderBy: [{ createdAt: "desc" }],
+          take: 1,
           include: {
             class: true,
             stream: true,
@@ -106,7 +108,27 @@ export async function GET(req: Request) {
       },
     });
 
-    return NextResponse.json(students);
+    // Flatten active enrollment to top-level class/stream fields for UI convenience
+    // (Keeps full enrollments array intact for other consumers.)
+    const enriched = students.map((s: any) => {
+      const enr = Array.isArray(s.enrollments) && s.enrollments.length ? s.enrollments[0] : null;
+
+      const className =
+        enr?.class?.name ?? enr?.class?.title ?? enr?.class?.label ?? null;
+      const streamName =
+        enr?.stream?.name ?? enr?.stream?.title ?? enr?.stream?.label ?? null;
+
+      return {
+        ...s,
+        classId: enr?.classId ?? s.classId ?? null,
+        streamId: enr?.streamId ?? s.streamId ?? null,
+        className,
+        streamName,
+      };
+    });
+
+    return NextResponse.json(enriched);
+
   } catch (e: any) {
     const msg = e?.message || "Error";
     const code = msg === "UNAUTHENTICATED" ? 401 : 500;

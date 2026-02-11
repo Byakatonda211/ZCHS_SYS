@@ -46,7 +46,11 @@ export async function POST(req: Request) {
         ? String(body.subjectPaperId).trim()
         : null;
 
-    const marks = Array.isArray(body?.marks) ? body.marks : [];
+    const marks = Array.isArray(body?.marks)
+      ? body.marks
+      : Array.isArray(body?.entries)
+        ? body.entries
+        : [];
 
     if (!academicYearId || !termId || !assessmentDefinitionId || !classId || !subjectId) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
