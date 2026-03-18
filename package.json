@@ -1,11 +1,10 @@
-"prisma": {
-  "seed": "node seed.js"
-}
-
 {
   "name": "sis-frontend",
   "version": "0.1.0",
   "private": true,
+  "prisma": {
+    "seed": "node seed.js"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -19,6 +18,8 @@
     "bcrypt": "^6.0.0",
     "bcryptjs": "^3.0.3",
     "clsx": "^2.1.1",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^4.2.1",
     "lucide-react": "^0.563.0",
     "next": "16.1.6",
     "pdf-lib": "^1.17.1",

@@ -35,6 +35,12 @@ export async function GET(req: Request) {
             assessmentDefinitionId: true,
             weightOutOf: true,
             order: true,
+            assessment: {
+              select: {
+                id: true,
+                name: true,
+              },
+            },
           },
         },
       },
@@ -42,14 +48,17 @@ export async function GET(req: Request) {
 
     if (!scheme) return NextResponse.json(null);
 
-    // return in your UI shape
     return NextResponse.json({
       id: scheme.id,
       reportType: scheme.reportType,
       name: scheme.name,
-      components: (scheme.components || []).map((c: any) => ({
+      components: (scheme.components || []).map((c: any, idx: number) => ({
         assessmentId: c.assessmentDefinitionId,
+        label:
+          c?.assessment?.name?.trim() ||
+          `CA${typeof c?.order === "number" ? c.order : idx + 1}`,
         weightOutOf: c.weightOutOf,
+        order: c.order ?? idx + 1,
       })),
     });
   } catch (e: any) {
@@ -74,7 +83,9 @@ export async function POST(req: Request) {
 
     const cleaned = components
       .map((c: any, idx: number) => ({
-        assessmentDefinitionId: String(c?.assessmentDefinitionId || c?.assessmentId || "").trim(),
+        assessmentDefinitionId: String(
+          c?.assessmentDefinitionId || c?.assessmentId || ""
+        ).trim(),
         weightOutOf: Math.max(0, Number(c?.weightOutOf) || 0),
         order: idx + 1,
       }))
@@ -104,7 +115,17 @@ export async function POST(req: Request) {
           name: true,
           components: {
             orderBy: [{ order: "asc" }],
-            select: { assessmentDefinitionId: true, weightOutOf: true },
+            select: {
+              assessmentDefinitionId: true,
+              weightOutOf: true,
+              order: true,
+              assessment: {
+                select: {
+                  id: true,
+                  name: true,
+                },
+              },
+            },
           },
         },
       });
@@ -116,9 +137,13 @@ export async function POST(req: Request) {
       id: result.id,
       reportType: result.reportType,
       name: result.name,
-      components: (result.components || []).map((c: any) => ({
+      components: (result.components || []).map((c: any, idx: number) => ({
         assessmentId: c.assessmentDefinitionId,
+        label:
+          c?.assessment?.name?.trim() ||
+          `CA${typeof c?.order === "number" ? c.order : idx + 1}`,
         weightOutOf: c.weightOutOf,
+        order: c.order ?? idx + 1,
       })),
     });
   } catch (e: any) {
