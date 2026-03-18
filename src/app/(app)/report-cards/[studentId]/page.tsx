@@ -195,9 +195,12 @@ export default function StudentReportCardPage() {
   const [student, setStudent] = React.useState<StudentApiRow | null>(null);
   const [scheme, setScheme] = React.useState<SchemeApiRow | null>(null);
   const [rows, setRows] = React.useState<SubjectReportRow[]>([]);
-  const [activeEnrollment, setActiveEnrollment] = React.useState<
-    StudentApiRow["enrollments"] extends Array<infer T> ? T | null : null
-  >(null);
+
+  type ActiveEnrollment = NonNullable<StudentApiRow["enrollments"]>[number];
+
+  const [activeEnrollment, setActiveEnrollment] =
+  React.useState<ActiveEnrollment | null>(null);
+
   const [academicYearName, setAcademicYearName] = React.useState("");
   const [termName, setTermName] = React.useState("");
   const [headTeacherComment, setHeadTeacherComment] = React.useState("");
