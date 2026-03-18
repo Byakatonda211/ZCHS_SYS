@@ -5,6 +5,7 @@ import { useParams, useSearchParams } from "next/navigation";
 import jsPDF from "jspdf";
 import { Button, Card, CardHeader, Badge } from "@/components/ui";
 import { getRemarkOverride, pickRemark } from "@/lib/store";
+import type { ReportType } from "@/lib/store";
 
 const SCHOOL_NAME = "Zana Christian High School";
 const SCHOOL_MOTTO = "IN GOD, WE TRUST";
@@ -177,11 +178,16 @@ function ReportValue({
 export default function StudentReportCardPage() {
   const { studentId } = useParams<{ studentId: string }>();
   const sp = useSearchParams();
-
   const yearId = sp.get("yearId") || "";
   const termId = sp.get("termId") || "";
-  const reportType = sp.get("reportType") || "O_EOT";
-
+  const rawReportType = sp.get("reportType");
+  const reportType: ReportType =
+    rawReportType === "O_MID" ||
+    rawReportType === "O_EOT" ||
+    rawReportType === "A_MID" ||
+    rawReportType === "A_EOT"
+      ? rawReportType
+      : "O_EOT";
   const [loading, setLoading] = React.useState(true);
   const [downloading, setDownloading] = React.useState(false);
   const [error, setError] = React.useState("");
