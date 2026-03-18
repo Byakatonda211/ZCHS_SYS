@@ -14,6 +14,8 @@ import {
   getTeacherById,
 } from "@/lib/store";
 
+export type OLevelReportType = "O_MID" | "O_EOT";
+
 export type ReportSubjectRow = {
   subjectId: string;
   subjectName: string;
@@ -38,7 +40,7 @@ export type StudentReportCardData = {
   academic: {
     academicYearId: string;
     termId: string;
-    reportType: string;
+    reportType: OLevelReportType;
     classId: string;
     className: string;
     streamName?: string;
@@ -77,7 +79,7 @@ export function buildStudentReportCard(params: {
   studentId: string;
   academicYearId: string;
   termId: string;
-  reportType: string;
+  reportType: OLevelReportType;
 }): StudentReportCardData | null {
   const { studentId, academicYearId, termId, reportType } = params;
 
