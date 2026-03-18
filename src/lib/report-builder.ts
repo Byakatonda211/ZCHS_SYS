@@ -3,9 +3,7 @@ import {
   getCurrentEnrollment,
   getClasses,
   getSubjectsForClass,
-  getPapersForSubject,
   computeOLevelSubjectTotal,
-  computeALevelPaperScore,
   gradeOLevel,
   getRemarkOverride,
   pickRemark,
@@ -22,13 +20,6 @@ export type ReportSubjectRow = {
   teacherInitials: string | null;
   total: number | null;
   grade: string;
-  papers?: {
-    paperId: string;
-    paperName: string;
-    mid: number | null;
-    eot: number | null;
-    final: number | null;
-  }[];
 };
 
 export type StudentReportCardData = {
@@ -44,7 +35,7 @@ export type StudentReportCardData = {
     classId: string;
     className: string;
     streamName?: string;
-    isALevel: boolean;
+    isALevel: false;
   };
   subjects: ReportSubjectRow[];
   overall: {
@@ -61,15 +52,6 @@ export type StudentReportCardData = {
     classTeacher: string;
   };
 };
-
-function gradeALevel(score: number | null) {
-  if (score === null) return "X";
-  if (score >= 80) return "A";
-  if (score >= 70) return "B";
-  if (score >= 60) return "C";
-  if (score >= 50) return "D";
-  return "E";
-}
 
 function roundOrNull(value: number | null) {
   return value === null ? null : Math.round(value);
@@ -98,7 +80,6 @@ export function buildStudentReportCard(params: {
   const className =
     getClasses().find((c) => c.id === classId)?.name ?? student.className ?? "";
 
-  const isALevel = className === "S5" || className === "S6";
   const subjects = getSubjectsForClass(classId);
 
   const subjectRows: ReportSubjectRow[] = subjects.map((subject) => {
@@ -107,67 +88,27 @@ export function buildStudentReportCard(params: {
       subjectId: subject.id,
       streamName,
     });
+
     const teacher = teacherAssignment
       ? getTeacherById(teacherAssignment.teacherId)
       : null;
 
-    if (!isALevel) {
-      const result = computeOLevelSubjectTotal({
-        studentId,
-        academicYearId,
-        termId,
-        reportType,
-        subjectId: subject.id,
-      });
-
-      const total = roundOrNull(result.total);
-
-      return {
-        subjectId: subject.id,
-        subjectName: subject.name,
-        teacherInitials: teacher?.initials ?? null,
-        total,
-        grade: gradeOLevel(total),
-      };
-    }
-
-    const papers = getPapersForSubject(subject.id).map((paper) => {
-      const result = computeALevelPaperScore({
-        studentId,
-        academicYearId,
-        termId,
-        reportType,
-        subjectId: subject.id,
-        paperId: paper.id,
-      });
-
-      return {
-        paperId: paper.id,
-        paperName: paper.name,
-        mid: result.mid ?? null,
-        eot: result.eot ?? null,
-        final: result.final ?? null,
-      };
+    const result = computeOLevelSubjectTotal({
+      studentId,
+      academicYearId,
+      termId,
+      reportType,
+      subjectId: subject.id,
     });
 
-    const paperFinals = papers
-      .map((p) => p.final)
-      .filter((x): x is number => typeof x === "number");
-
-    const total =
-      paperFinals.length > 0
-        ? Math.round(
-            paperFinals.reduce((sum, val) => sum + val, 0) / paperFinals.length
-          )
-        : null;
+    const total = roundOrNull(result.total);
 
     return {
       subjectId: subject.id,
       subjectName: subject.name,
       teacherInitials: teacher?.initials ?? null,
       total,
-      grade: gradeALevel(total),
-      papers,
+      grade: gradeOLevel(total),
     };
   });
 
@@ -182,9 +123,7 @@ export function buildStudentReportCard(params: {
     overallAverage = Math.round(
       totals.reduce((sum, val) => sum + val, 0) / totals.length
     );
-    overallGrade = isALevel
-      ? gradeALevel(overallAverage)
-      : gradeOLevel(overallAverage);
+    overallGrade = gradeOLevel(overallAverage);
   }
 
   const override = getRemarkOverride({
@@ -228,7 +167,7 @@ export function buildStudentReportCard(params: {
       classId,
       className,
       streamName,
-      isALevel,
+      isALevel: false,
     },
     subjects: subjectRows,
     overall: {
