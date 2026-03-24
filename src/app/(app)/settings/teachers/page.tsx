@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Card, CardHeader, Button, Input, Label, Select, Badge } from '@/components/ui';
+import { Card, CardHeader, Button, Input, Label, Select } from '@/components/ui';
 
 type ApiTeacher = {
   id: string;
@@ -18,7 +18,6 @@ type ApiSubject = { id: string; name: string; level?: string | null };
 
 type Assignment = {
   id: string;
-  // API uses userId; keep teacherId for backward compatibility
   userId?: string;
   teacherId?: string;
   classId: string;
@@ -78,19 +77,20 @@ export default function TeachersSettingsPage() {
     setLoading(true);
     setErr('');
     try {
-      const [t, c, s, sub, a] = await Promise.all([
+      const [t, c, s, oSubjects, aSubjects, a] = await Promise.all([
         apiGet<ApiTeacher[]>('/api/teachers'),
         apiGet<ApiClass[]>('/api/settings/classes'),
         apiGet<ApiStream[]>('/api/settings/streams'),
-        apiGet<ApiSubject[]>('/api/settings/subjects'),
+        apiGet<ApiSubject[]>('/api/settings/subjects?level=O_LEVEL'),
+        apiGet<ApiSubject[]>('/api/settings/subjects?level=A_LEVEL'),
         apiGet<Assignment[]>('/api/teachers/assignments'),
       ]);
 
-      setTeachers(t);
-      setClasses(c);
-      setStreams(s);
-      setSubjects(sub);
-      setAssignments(a);
+      setTeachers(t || []);
+      setClasses(c || []);
+      setStreams(s || []);
+      setSubjects([...(oSubjects || []), ...(aSubjects || [])]);
+      setAssignments(a || []);
     } catch (e: any) {
       setErr(e?.message || 'Failed to load');
     } finally {
@@ -160,17 +160,39 @@ export default function TeachersSettingsPage() {
   }
 
   const streamsForClass = streams.filter((s) => (classId ? s.classId === classId : true));
+
+  const selectedClass = React.useMemo(
+    () => classes.find((x) => x.id === classId) || null,
+    [classId, classes]
+  );
+
   const isALevelClass = React.useMemo(() => {
-    const c = classes.find((x) => x.id === classId);
-    const name = (c?.name || '').toUpperCase();
+    const level = String(selectedClass?.level || '').toUpperCase();
+    if (level.includes('A')) return true;
+    if (level.includes('O')) return false;
+
+    const name = String(selectedClass?.name || '').toUpperCase();
     return name.includes('S5') || name.includes('S6');
-  }, [classId, classes]);
+  }, [selectedClass]);
 
   const visibleSubjects = React.useMemo(() => {
     if (!classId) return subjects;
-    if (isALevelClass) return subjects.filter((s) => String(s.level || '').toUpperCase().includes('A'));
-    return subjects.filter((s) => !String(s.level || '').toUpperCase().includes('A'));
+
+    return subjects.filter((s) => {
+      const level = String(s.level || '').toUpperCase();
+      if (isALevelClass) return level.includes('A');
+      return level.includes('O');
+    });
   }, [subjects, classId, isALevelClass]);
+
+  React.useEffect(() => {
+    setStreamId('');
+    setSubjectId('');
+  }, [classId]);
+
+  React.useEffect(() => {
+    if (isClassTeacher) setSubjectId('');
+  }, [isClassTeacher]);
 
   return (
     <div className="space-y-4">
@@ -198,7 +220,12 @@ export default function TeachersSettingsPage() {
           </div>
           <div>
             <Label>Password</Label>
-            <Input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Set a password" />
+            <Input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Set a password"
+            />
           </div>
           <div>
             <Label>Role</Label>
@@ -298,6 +325,8 @@ export default function TeachersSettingsPage() {
         <div className="p-5 pt-0 overflow-x-auto">
           {loading ? (
             <div className="text-sm text-slate-600">Loading…</div>
+          ) : teachers.length === 0 ? (
+            <div className="text-sm text-slate-600">No teacher accounts yet.</div>
           ) : (
             <table className="w-full text-sm text-slate-900">
               <thead>
@@ -371,7 +400,9 @@ export default function TeachersSettingsPage() {
                         ? a.subject?.name ?? subjects.find((s) => s.id === a.subjectId)?.name ?? a.subjectId
                         : '—'}
                     </td>
-                    <td className="py-2 text-slate-900">{a.isClassTeacher ? 'Class Teacher' : 'Subject Teacher'}</td>
+                    <td className="py-2 text-slate-900">
+                      {a.isClassTeacher ? 'Class Teacher' : 'Subject Teacher'}
+                    </td>
                     <td className="py-2 text-right">
                       <Button variant="ghost" onClick={() => deleteAssignment(a.id)}>
                         Remove
