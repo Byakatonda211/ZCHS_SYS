@@ -17,9 +17,16 @@ export async function GET(req: Request) {
     if (!cls) return NextResponse.json([]);
 
     const rows = await prisma.subject.findMany({
-      where: { isActive: true, level: String(cls.level) }, // "O_LEVEL" | "A_LEVEL"
+      where: { isActive: true, level: String(cls.level) },
       orderBy: [{ name: "asc" }],
-      select: { id: true, name: true, code: true, level: true, isActive: true },
+      select: {
+        id: true,
+        name: true,
+        code: true,
+        level: true,
+        isActive: true,
+        isCompulsory: true,
+      },
     });
 
     return NextResponse.json(rows);

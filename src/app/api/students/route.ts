@@ -43,7 +43,7 @@ export async function GET(req: Request) {
     const classId = (searchParams.get("classId") || "").trim();
     const streamId = (searchParams.get("streamId") || "").trim();
 
-    // ✅ NEW: subject filter (only students registered for subject)
+    // ✅ subject filter (only students registered for subject)
     const subjectId = (searchParams.get("subjectId") || "").trim();
 
     const students = await prisma.student.findMany({
@@ -128,7 +128,6 @@ export async function GET(req: Request) {
     });
 
     return NextResponse.json(enriched);
-
   } catch (e: any) {
     const msg = e?.message || "Error";
     const code = msg === "UNAUTHENTICATED" ? 401 : 500;
@@ -179,10 +178,12 @@ export async function POST(req: Request) {
     const recurrentMedication = toStrOrNull(body?.recurrentMedication);
     const knownDisability = toStrOrNull(body?.knownDisability);
 
-    // NEW: Residence Section (DAY | BOARDING)
+    // Residence Section (DAY | BOARDING)
     const residenceSectionRaw = String(body?.residenceSection ?? "").trim();
     const residenceSection =
-      residenceSectionRaw === "DAY" || residenceSectionRaw === "BOARDING" ? residenceSectionRaw : null;
+      residenceSectionRaw === "DAY" || residenceSectionRaw === "BOARDING"
+        ? residenceSectionRaw
+        : null;
 
     // Enrollment fields (required)
     const classId = String(body?.classId || "").trim();
@@ -194,6 +195,32 @@ export async function POST(req: Request) {
 
     if (!firstName || !lastName || !classId || !academicYearId) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+    }
+
+    const cls = await prisma.class.findUnique({
+      where: { id: classId },
+      select: { id: true, level: true },
+    });
+
+    if (!cls) {
+      return NextResponse.json({ error: "Selected class was not found" }, { status: 400 });
+    }
+
+    let finalSubjectIds = [...enrolledSubjectIds];
+
+    if (cls.level === "O_LEVEL") {
+      const compulsorySubjects = await prisma.subject.findMany({
+        where: {
+          isActive: true,
+          level: "O_LEVEL",
+          isCompulsory: true,
+        },
+        select: { id: true },
+      });
+
+      finalSubjectIds = Array.from(
+        new Set([...enrolledSubjectIds, ...compulsorySubjects.map((s) => s.id)])
+      );
     }
 
     const created = await prisma.$transaction(async (tx) => {
@@ -255,10 +282,10 @@ export async function POST(req: Request) {
         },
       });
 
-      // save selected subjects (optional)
-      if (enrolledSubjectIds.length > 0) {
+      // save selected subjects + compulsory O-Level subjects
+      if (finalSubjectIds.length > 0) {
         await tx.enrollmentSubject.createMany({
-          data: enrolledSubjectIds.map((subjectId) => ({
+          data: finalSubjectIds.map((subjectId) => ({
             enrollmentId: enrollment.id,
             subjectId,
           })),

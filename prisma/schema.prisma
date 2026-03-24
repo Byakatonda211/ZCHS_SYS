@@ -175,6 +175,7 @@ model Subject {
   name                String
   code                String?
   level               String // assuming you already have this ("O_LEVEL"/"A_LEVEL")
+  isCompulsory        Boolean              @default(false)
   isActive            Boolean              @default(true)
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
@@ -186,6 +187,7 @@ model Subject {
   @@unique([level, name])
   @@index([level])
   @@index([isActive])
+  @@index([level, isCompulsory])
 }
 
 model SubjectPaper {

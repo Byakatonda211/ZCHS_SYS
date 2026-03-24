@@ -2,13 +2,17 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin, requireUser } from "@/lib/auth";
 
-export async function GET(_: Request, ctx: { params: Promise<{ subjectId: string }> }) {
+export async function GET(_: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
     await requireUser();
-    const { subjectId } = await ctx.params;
+
+    const { id } = await ctx.params;
+    if (!id) {
+      return NextResponse.json({ error: "Missing subject id" }, { status: 400 });
+    }
 
     const papers = await prisma.subjectPaper.findMany({
-      where: { subjectId },
+      where: { subjectId: id },
       orderBy: { order: "asc" },
     });
 
@@ -19,13 +23,17 @@ export async function GET(_: Request, ctx: { params: Promise<{ subjectId: string
   }
 }
 
-export async function POST(req: Request, ctx: { params: Promise<{ subjectId: string }> }) {
+export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
     const user = await requireUser();
     requireAdmin(user);
 
-    const { subjectId } = await ctx.params;
-    const body = await req.json();
+    const { id } = await ctx.params;
+    if (!id) {
+      return NextResponse.json({ error: "Missing subject id" }, { status: 400 });
+    }
+
+    const body = await req.json().catch(() => ({}));
 
     // Allow creating one paper OR many papers at once
     const items = Array.isArray(body?.papers) ? body.papers : [body];
@@ -39,9 +47,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ subjectId: str
 
       created.push(
         await prisma.subjectPaper.upsert({
-          where: { subjectId_name: { subjectId, name } },
+          where: { subjectId_name: { subjectId: id, name } },
           update: { order, isActive: true },
-          create: { subjectId, name, order, isActive: true },
+          create: { subjectId: id, name, order, isActive: true },
         })
       );
     }

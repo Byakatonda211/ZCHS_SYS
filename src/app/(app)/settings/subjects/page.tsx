@@ -17,6 +17,7 @@ type Subject = {
   name: string;
   code?: string | null;
   level: Level;
+  isCompulsory?: boolean;
   papers?: SubjectPaper[];
 };
 
@@ -38,6 +39,26 @@ async function apiPost<T>(url: string, body: any): Promise<T> {
   return data as T;
 }
 
+async function apiPatch<T>(url: string, body: any): Promise<T> {
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `Request failed: ${res.status}`);
+  return data as T;
+}
+
+async function apiDelete<T>(url: string): Promise<T> {
+  const res = await fetch(url, {
+    method: 'DELETE',
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `Request failed: ${res.status}`);
+  return data as T;
+}
+
 function buildAutoPapers(n: number) {
   const papers = [];
   for (let i = 1; i <= n; i++) papers.push({ name: `Paper ${i}`, order: i });
@@ -53,10 +74,15 @@ export default function SubjectsPage() {
 
   const [newName, setNewName] = React.useState('');
   const [newCode, setNewCode] = React.useState('');
+  const [newIsCompulsory, setNewIsCompulsory] = React.useState(false);
 
-  // per-subject paper UI
+  const [editingId, setEditingId] = React.useState<string | null>(null);
+  const [editName, setEditName] = React.useState('');
+  const [editCode, setEditCode] = React.useState('');
+  const [editIsCompulsory, setEditIsCompulsory] = React.useState(false);
+
   const [paperName, setPaperName] = React.useState<Record<string, string>>({});
-  const [paperCount, setPaperCount] = React.useState<Record<string, number>>({}); // subjectId -> count
+  const [paperCount, setPaperCount] = React.useState<Record<string, number>>({});
 
   async function refresh() {
     setErr('');
@@ -75,18 +101,80 @@ export default function SubjectsPage() {
     refresh();
   }, [level]);
 
+  function startEdit(subject: Subject) {
+    setEditingId(subject.id);
+    setEditName(subject.name || '');
+    setEditCode(subject.code || '');
+    setEditIsCompulsory(!!subject.isCompulsory);
+    setErr('');
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setEditName('');
+    setEditCode('');
+    setEditIsCompulsory(false);
+  }
+
   async function addSubject() {
     setErr('');
     setBusy(true);
     try {
       const name = newName.trim();
       if (!name) throw new Error('Enter subject name');
-      await apiPost('/api/settings/subjects', { name, code: newCode.trim() || undefined, level });
+
+      await apiPost('/api/settings/subjects', {
+        name,
+        code: newCode.trim() || undefined,
+        level,
+        isCompulsory: level === 'O_LEVEL' ? newIsCompulsory : false,
+      });
+
       setNewName('');
       setNewCode('');
+      setNewIsCompulsory(false);
       await refresh();
     } catch (e: any) {
       setErr(e?.message || 'Failed to add subject');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveEdit(subjectId: string) {
+    setErr('');
+    setBusy(true);
+    try {
+      const name = editName.trim();
+      if (!name) throw new Error('Enter subject name');
+
+      await apiPatch(`/api/settings/subjects/${subjectId}`, {
+        name,
+        code: editCode.trim() || null,
+        isCompulsory: level === 'O_LEVEL' ? editIsCompulsory : false,
+      });
+
+      cancelEdit();
+      await refresh();
+    } catch (e: any) {
+      setErr(e?.message || 'Failed to update subject');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteSubject(subjectId: string, subjectName: string) {
+    const ok = window.confirm(`Delete subject "${subjectName}"?`);
+    if (!ok) return;
+
+    setErr('');
+    setBusy(true);
+    try {
+      await apiDelete(`/api/settings/subjects/${subjectId}`);
+      if (editingId === subjectId) cancelEdit();
+      await refresh();
+    } catch (e: any) {
+      setErr(e?.message || 'Failed to delete subject');
     } finally {
       setBusy(false);
     }
@@ -137,7 +225,10 @@ export default function SubjectsPage() {
           <select
             className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-900 outline-none focus:ring-2 focus:ring-slate-200"
             value={level}
-            onChange={(e) => setLevel(e.target.value as Level)}
+            onChange={(e) => {
+              setLevel(e.target.value as Level);
+              cancelEdit();
+            }}
           >
             <option value="O_LEVEL">O-Level (S1–S4)</option>
             <option value="A_LEVEL">A-Level (S5–S6)</option>
@@ -166,6 +257,19 @@ export default function SubjectsPage() {
             </Button>
           </div>
         </div>
+
+        {level === 'O_LEVEL' ? (
+          <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              className="h-4 w-4"
+              checked={newIsCompulsory}
+              onChange={(e) => setNewIsCompulsory(e.target.checked)}
+            />
+            <span>Compulsory subject</span>
+          </label>
+        ) : null}
+
         <div className="mt-2 text-xs text-slate-500">
           Tip: Switch to <span className="font-semibold">A-Level</span> to manage papers for subjects like Physics.
         </div>
@@ -188,69 +292,129 @@ export default function SubjectsPage() {
           <div className="mt-4 text-sm text-slate-500">No subjects yet.</div>
         ) : (
           <div className="mt-4 space-y-4">
-            {items.map((s) => (
-              <div key={s.id} className="rounded-2xl border border-slate-200 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <div className="text-sm font-semibold text-slate-900">{s.name}</div>
-                    {s.code ? (
-                      <span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-700">{s.code}</span>
-                    ) : null}
+            {items.map((s) => {
+              const isEditing = editingId === s.id;
+
+              return (
+                <div key={s.id} className="rounded-2xl border border-slate-200 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="flex-1 min-w-[240px]">
+                      {isEditing ? (
+                        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                          <div>
+                            <Label>Name</Label>
+                            <Input value={editName} onChange={(e) => setEditName(e.target.value)} />
+                          </div>
+                          <div>
+                            <Label>Code (optional)</Label>
+                            <Input value={editCode} onChange={(e) => setEditCode(e.target.value)} />
+                          </div>
+                          {level === 'O_LEVEL' ? (
+                            <div className="md:col-span-2">
+                              <label className="flex items-center gap-2 text-sm text-slate-700">
+                                <input
+                                  type="checkbox"
+                                  className="h-4 w-4"
+                                  checked={editIsCompulsory}
+                                  onChange={(e) => setEditIsCompulsory(e.target.checked)}
+                                />
+                                <span>Compulsory subject</span>
+                              </label>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <div className="text-sm font-semibold text-slate-900">{s.name}</div>
+                          {s.code ? (
+                            <span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-700">{s.code}</span>
+                          ) : null}
+                          {level === 'O_LEVEL' && s.isCompulsory ? (
+                            <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
+                              Compulsory
+                            </span>
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-700">
+                        {s.level === 'A_LEVEL' ? 'A-Level' : 'O-Level'}
+                      </span>
+
+                      {isEditing ? (
+                        <>
+                          <Button variant="secondary" onClick={() => saveEdit(s.id)} disabled={busy}>
+                            Save
+                          </Button>
+                          <Button variant="secondary" onClick={cancelEdit} disabled={busy}>
+                            Cancel
+                          </Button>
+                        </>
+                      ) : (
+                        <>
+                          <Button variant="secondary" onClick={() => startEdit(s)} disabled={busy}>
+                            Edit
+                          </Button>
+                          <Button variant="secondary" onClick={() => deleteSubject(s.id, s.name)} disabled={busy}>
+                            Delete
+                          </Button>
+                        </>
+                      )}
+                    </div>
                   </div>
-                  <span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-700">
-                    {s.level === 'A_LEVEL' ? 'A-Level' : 'O-Level'}
-                  </span>
-                </div>
 
-                {level === 'A_LEVEL' ? (
-                  <div className="mt-3">
-                    <div className="text-xs font-semibold text-slate-700">Papers</div>
+                  {level === 'A_LEVEL' ? (
+                    <div className="mt-3">
+                      <div className="text-xs font-semibold text-slate-700">Papers</div>
 
-                    {s.papers && s.papers.length ? (
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {s.papers.map((p) => (
-                          <span key={p.id} className="rounded-full border border-slate-200 bg-white px-2 py-1 text-xs">
-                            {p.name}
-                          </span>
-                        ))}
+                      {s.papers && s.papers.length ? (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {s.papers.map((p) => (
+                            <span key={p.id} className="rounded-full border border-slate-200 bg-white px-2 py-1 text-xs">
+                              {p.name}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="mt-2 text-sm text-slate-500">No papers yet.</div>
+                      )}
+
+                      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                        <div className="sm:col-span-2">
+                          <Input
+                            value={paperName[s.id] || ''}
+                            onChange={(e) => setPaperName((m) => ({ ...m, [s.id]: e.target.value }))}
+                            placeholder="Add paper (e.g. Paper 1)"
+                          />
+                        </div>
+                        <div className="sm:col-span-1">
+                          <Button className="w-full" variant="secondary" onClick={() => addPaper(s.id)} disabled={busy}>
+                            Add Paper
+                          </Button>
+                        </div>
                       </div>
-                    ) : (
-                      <div className="mt-2 text-sm text-slate-500">No papers yet.</div>
-                    )}
 
-                    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
-                      <div className="sm:col-span-2">
-                        <Input
-                          value={paperName[s.id] || ''}
-                          onChange={(e) => setPaperName((m) => ({ ...m, [s.id]: e.target.value }))}
-                          placeholder="Add paper (e.g. Paper 1)"
-                        />
-                      </div>
-                      <div className="sm:col-span-1">
-                        <Button className="w-full" variant="secondary" onClick={() => addPaper(s.id)} disabled={busy}>
-                          Add Paper
+                      <div className="mt-3 flex flex-wrap items-end gap-2">
+                        <div className="w-28">
+                          <Label>Auto papers</Label>
+                          <Input
+                            value={String(paperCount[s.id] || 3)}
+                            onChange={(e) => setPaperCount((m) => ({ ...m, [s.id]: Number(e.target.value) }))}
+                            inputMode="numeric"
+                          />
+                        </div>
+                        <Button variant="secondary" onClick={() => autoGenerate(s.id)} disabled={busy}>
+                          Auto-generate
                         </Button>
+                        <span className="text-xs text-slate-500">Creates Paper 1..N (up to 6).</span>
                       </div>
                     </div>
-
-                    <div className="mt-3 flex flex-wrap items-end gap-2">
-                      <div className="w-28">
-                        <Label>Auto papers</Label>
-                        <Input
-                          value={String(paperCount[s.id] || 3)}
-                          onChange={(e) => setPaperCount((m) => ({ ...m, [s.id]: Number(e.target.value) }))}
-                          inputMode="numeric"
-                        />
-                      </div>
-                      <Button variant="secondary" onClick={() => autoGenerate(s.id)} disabled={busy}>
-                        Auto-generate
-                      </Button>
-                      <span className="text-xs text-slate-500">Creates Paper 1..N (up to 6).</span>
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            ))}
+                  ) : null}
+                </div>
+              );
+            })}
           </div>
         )}
       </Card>

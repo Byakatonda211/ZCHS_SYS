@@ -19,6 +19,7 @@ type ApiSubject = {
   code?: string | null;
   level: 'O_LEVEL' | 'A_LEVEL';
   isActive?: boolean;
+  isCompulsory?: boolean;
 };
 
 async function apiGet<T>(url: string): Promise<T> {
@@ -52,7 +53,6 @@ const schema = z.object({
   academicYearId: z.string().min(1, 'Academic year is required'),
   termId: z.string().optional(),
 
-  // ✅ NEW: optional residence section
   residenceSection: z.enum(['DAY', 'BOARDING']).optional(),
 
   guardianName: z.string().optional(),
@@ -130,7 +130,10 @@ export default function NewStudentPage() {
           apiGet<ApiStream[]>('/api/settings/streams'),
           apiGet<ApiYear[]>('/api/settings/academic-years'),
           apiGet<ApiTerm[]>('/api/settings/terms'),
-          apiGet<ApiSubject[]>('/api/settings/subjects'),
+          apiGet<ApiSubject[]>('/api/settings/subjects?level=O_LEVEL').then(async (oLevel) => {
+            const aLevel = await apiGet<ApiSubject[]>('/api/settings/subjects?level=A_LEVEL');
+            return [...oLevel, ...aLevel];
+          }),
         ]);
 
         setClasses((c || []).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0)));
@@ -154,8 +157,7 @@ export default function NewStudentPage() {
         setErr(e?.message || 'Failed to load academic setup');
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [getValues, setValue]);
 
   const streamsForClass = React.useMemo(() => streams.filter((s) => s.classId === classId), [streams, classId]);
   const termsForYear = React.useMemo(() => terms.filter((t) => t.academicYearId === academicYearId), [terms, academicYearId]);
@@ -165,24 +167,34 @@ export default function NewStudentPage() {
     if (currentStreamId && !streamsForClass.some((s) => s.id === currentStreamId)) {
       setValue('streamId', '');
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [classId, streamsForClass.length]);
+  }, [classId, streamsForClass, setValue, watch]);
 
   React.useEffect(() => {
     const current = termsForYear.find((tt) => tt.isCurrent) ?? termsForYear[0];
     if (current) setValue('termId', current.id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [academicYearId, termsForYear.length]);
+  }, [academicYearId, termsForYear, setValue]);
 
   const visibleSubjects = React.useMemo(() => {
     if (!selectedClass) return [];
     return subjects.filter((s) => s.level === selectedClass.level);
   }, [subjects, selectedClass]);
 
-  // ✅ CHANGED: subjects selection is OPTIONAL (no auto-select)
   React.useEffect(() => {
-    setEnrolledSubjectIds([]);
-  }, [selectedClass?.id]);
+    if (!selectedClass) {
+      setEnrolledSubjectIds([]);
+      return;
+    }
+
+    if (selectedClass.level === 'O_LEVEL') {
+      const compulsoryIds = subjects
+        .filter((s) => s.level === 'O_LEVEL' && s.isCompulsory)
+        .map((s) => s.id);
+
+      setEnrolledSubjectIds(compulsoryIds);
+    } else {
+      setEnrolledSubjectIds([]);
+    }
+  }, [selectedClass?.id, selectedClass?.level, subjects]);
 
   function toggleSubject(subjectId: string) {
     setEnrolledSubjectIds((prev) => (prev.includes(subjectId) ? prev.filter((x) => x !== subjectId) : [...prev, subjectId]));
@@ -202,32 +214,24 @@ export default function NewStudentPage() {
         address: values.address || null,
         guardianName: values.guardianName || null,
         guardianPhone: values.guardianPhone || null,
-
-        // ✅ NEW
         residenceSection: values.residenceSection || null,
-
         pleSittingYear: values.pleSittingYear || null,
         plePrimarySchool: values.plePrimarySchool || null,
         pleIndexNumber: values.pleIndexNumber || null,
         pleAggregates: values.pleAggregates || null,
         pleDivision: values.pleDivision || null,
-
         village: values.village || null,
         parish: values.parish || null,
         districtOfResidence: values.districtOfResidence || null,
         homeDistrict: values.homeDistrict || null,
         emergencyContactName: values.emergencyContactName || null,
         emergencyContactPhone: values.emergencyContactPhone || null,
-
         medicalConditions: values.medicalConditions || null,
         recurrentMedication: values.recurrentMedication || null,
         knownDisability: values.knownDisability || null,
-
         academicYearId: values.academicYearId,
         classId: values.classId,
         streamId: values.streamId || null,
-
-        // ✅ Optional subjects
         enrolledSubjectIds,
       });
 
@@ -373,7 +377,6 @@ export default function NewStudentPage() {
               </select>
             </div>
 
-            {/* ✅ NEW: Residence Section dropdown (optional) */}
             <div className="space-y-2 sm:col-span-2">
               <Label>Residence Section (optional)</Label>
               <select
@@ -387,12 +390,13 @@ export default function NewStudentPage() {
               </select>
             </div>
 
-            {/* Subjects checklist (optional) */}
             <div className="space-y-2 sm:col-span-2">
               <div className="flex items-end justify-between gap-2">
                 <div>
                   <Label>Subjects Offered (optional)</Label>
-                  <p className="text-xs text-slate-600">You may leave this blank (optional).</p>
+                  <p className="text-xs text-slate-600">
+                    O-Level compulsory subjects are pre-selected automatically.
+                  </p>
                 </div>
 
                 {selectedClass ? (
@@ -428,6 +432,11 @@ export default function NewStudentPage() {
                           <span className="flex-1">
                             {sub.name}
                             {sub.code ? <span className="text-slate-500"> ({sub.code})</span> : null}
+                            {sub.isCompulsory && sub.level === 'O_LEVEL' ? (
+                              <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                                compulsory
+                              </span>
+                            ) : null}
                           </span>
                         </label>
                       );
