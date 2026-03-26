@@ -38,6 +38,15 @@ type StudentRow = {
   streamName?: string | null;
 };
 
+type StudentsResponse =
+  | StudentRow[]
+  | {
+      items?: StudentRow[];
+      total?: number;
+      page?: number;
+      totalPages?: number;
+    };
+
 type ReportType = "O_MID" | "O_EOT" | "A_MID" | "A_EOT";
 
 const REPORT_TYPES: { value: ReportType; label: string }[] = [
@@ -46,6 +55,11 @@ const REPORT_TYPES: { value: ReportType; label: string }[] = [
   { value: "A_MID", label: "A-Level Mid" },
   { value: "A_EOT", label: "A-Level End" },
 ];
+
+function studentsFromResponse(data: StudentsResponse): StudentRow[] {
+  if (Array.isArray(data)) return data;
+  return Array.isArray(data?.items) ? data.items : [];
+}
 
 export default function ReportCardsPage() {
   const router = useRouter();
@@ -56,6 +70,9 @@ export default function ReportCardsPage() {
   const [terms, setTerms] = React.useState<TermRow[]>([]);
   const [classes, setClasses] = React.useState<ClassRow[]>([]);
   const [students, setStudents] = React.useState<StudentRow[]>([]);
+  const [page, setPage] = React.useState(1);
+  const [totalPages, setTotalPages] = React.useState(1);
+  const [totalStudents, setTotalStudents] = React.useState(0);
 
   const [yearId, setYearId] = React.useState("");
   const [termId, setTermId] = React.useState("");
@@ -71,6 +88,10 @@ export default function ReportCardsPage() {
   React.useEffect(() => {
     setMounted(true);
   }, []);
+
+  React.useEffect(() => {
+    setPage(1);
+  }, [classId, query]);
 
   React.useEffect(() => {
     if (!mounted) return;
@@ -180,7 +201,7 @@ export default function ReportCardsPage() {
           setTerms(loadedTerms);
           setTermId(nextTerm?.id ?? "");
         }
-      } catch (err: any) {
+      } catch {
         if (!cancelled) {
           setTerms([]);
           setTermId("");
@@ -198,6 +219,8 @@ export default function ReportCardsPage() {
   React.useEffect(() => {
     if (!mounted || !classId) {
       setStudents([]);
+      setTotalPages(1);
+      setTotalStudents(0);
       return;
     }
 
@@ -210,6 +233,8 @@ export default function ReportCardsPage() {
 
         const params = new URLSearchParams();
         params.set("classId", classId);
+        params.set("page", String(page));
+        params.set("pageSize", "30");
         if (query.trim()) params.set("q", query.trim());
 
         const res = await fetch(`/api/students?${params.toString()}`, {
@@ -223,12 +248,17 @@ export default function ReportCardsPage() {
         }
 
         if (!cancelled) {
-          setStudents(Array.isArray(data) ? data : []);
+          const items = studentsFromResponse(data);
+          setStudents(items);
+          setTotalPages(Number(data?.totalPages ?? 1));
+          setTotalStudents(Number(data?.total ?? items.length ?? 0));
         }
       } catch (err: any) {
         if (!cancelled) {
           setStudents([]);
           setStudentsError(err?.message || "Failed to load students");
+          setTotalPages(1);
+          setTotalStudents(0);
         }
       } finally {
         if (!cancelled) {
@@ -242,7 +272,7 @@ export default function ReportCardsPage() {
     return () => {
       cancelled = true;
     };
-  }, [mounted, classId, query]);
+  }, [mounted, classId, query, page]);
 
   if (!mounted || bootLoading) {
     return <div className="p-4 text-sm text-slate-500">Loading report cards...</div>;
@@ -267,57 +297,39 @@ export default function ReportCardsPage() {
         />
         <div className="grid grid-cols-1 gap-3 p-4 sm:grid-cols-2 xl:grid-cols-5">
           <div>
-            <div className="mb-1 text-xs font-medium text-slate-500">
-              Academic Year
-            </div>
-            <Select value={yearId} onChange={(e) => setYearId(e.target.value)}>
-              <option value="">Select year</option>
-              {years.map((y) => (
-                <option key={y.id} value={y.id}>
-                  {y.name}
-                </option>
-              ))}
-            </Select>
+            <div className="mb-1 text-xs font-medium text-slate-500">Academic Year</div>
+            <Select
+              value={yearId}
+              onChange={(e) => setYearId(e.target.value)}
+              options={years.map((y) => ({ value: y.id, label: y.name }))}
+            />
           </div>
 
           <div>
             <div className="mb-1 text-xs font-medium text-slate-500">Term</div>
-            <Select value={termId} onChange={(e) => setTermId(e.target.value)}>
-              <option value="">Select term</option>
-              {terms.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </Select>
+            <Select
+              value={termId}
+              onChange={(e) => setTermId(e.target.value)}
+              options={terms.map((t) => ({ value: t.id, label: t.name }))}
+            />
           </div>
 
           <div>
             <div className="mb-1 text-xs font-medium text-slate-500">Class</div>
-            <Select value={classId} onChange={(e) => setClassId(e.target.value)}>
-              <option value="">Select class</option>
-              {classes.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </Select>
+            <Select
+              value={classId}
+              onChange={(e) => setClassId(e.target.value)}
+              options={classes.map((c) => ({ value: c.id, label: c.name }))}
+            />
           </div>
 
           <div>
-            <div className="mb-1 text-xs font-medium text-slate-500">
-              Report Type
-            </div>
+            <div className="mb-1 text-xs font-medium text-slate-500">Report Type</div>
             <Select
               value={reportType}
               onChange={(e) => setReportType(e.target.value as ReportType)}
-            >
-              {REPORT_TYPES.map((r) => (
-                <option key={r.value} value={r.value}>
-                  {r.label}
-                </option>
-              ))}
-            </Select>
+              options={REPORT_TYPES.map((r) => ({ value: r.value, label: r.label }))}
+            />
           </div>
 
           <div>
@@ -335,11 +347,7 @@ export default function ReportCardsPage() {
         <CardHeader
           title="Students"
           subtitle={classId ? "Students in selected class" : "Select a class first"}
-          right={
-            <Badge>
-              {studentsLoading ? "Loading..." : `${students.length} found`}
-            </Badge>
-          }
+          right={<Badge>{studentsLoading ? "Loading..." : `${totalStudents} found`}</Badge>}
         />
 
         <div className="p-4">
@@ -352,44 +360,67 @@ export default function ReportCardsPage() {
           ) : studentsLoading ? (
             <div className="text-sm text-slate-500">Loading students...</div>
           ) : students.length === 0 ? (
-            <div className="text-sm text-slate-500">
-              No students found for the selected class.
-            </div>
+            <div className="text-sm text-slate-500">No students found for the selected class.</div>
           ) : (
-            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-              {students.map((s) => (
-                <div
-                  key={s.id}
-                  className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-3"
-                >
-                  <div className="min-w-0">
-                    <div className="truncate font-semibold text-slate-900">
-                      {s.firstName} {s.lastName}
-                    </div>
-                    <div className="truncate text-xs text-slate-500">
-                      {s.admissionNo || s.studentNo || "No admission number"}
-                      {s.className ? ` • ${s.className}` : ""}
-                      {s.streamName ? ` • ${s.streamName}` : ""}
-                    </div>
-                  </div>
-
-                  <Button
-                    disabled={!yearId || !termId}
-                    onClick={() =>
-                      router.push(
-                        `/report-cards/${s.id}?yearId=${encodeURIComponent(
-                          yearId
-                        )}&termId=${encodeURIComponent(
-                          termId
-                        )}&reportType=${encodeURIComponent(reportType)}`
-                      )
-                    }
+            <>
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                {students.map((s) => (
+                  <div
+                    key={s.id}
+                    className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-3"
                   >
-                    Open
+                    <div className="min-w-0">
+                      <div className="truncate font-semibold text-slate-900">
+                        {s.firstName} {s.lastName}
+                      </div>
+                      <div className="truncate text-xs text-slate-500">
+                        {s.admissionNo || s.studentNo || "No admission number"}
+                        {s.className ? ` • ${s.className}` : ""}
+                        {s.streamName ? ` • ${s.streamName}` : ""}
+                      </div>
+                    </div>
+
+                    <Button
+                      disabled={!yearId || !termId}
+                      onClick={() =>
+                        router.push(
+                          `/report-cards/${s.id}?yearId=${encodeURIComponent(
+                            yearId
+                          )}&termId=${encodeURIComponent(
+                            termId
+                          )}&reportType=${encodeURIComponent(reportType)}`
+                        )
+                      }
+                    >
+                      Open
+                    </Button>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-4 flex items-center justify-between">
+                <div className="text-sm text-slate-500">
+                  Page {page} of {totalPages}
+                </div>
+
+                <div className="flex gap-2">
+                  <Button
+                    variant="secondary"
+                    disabled={page <= 1 || studentsLoading}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    disabled={page >= totalPages || studentsLoading}
+                    onClick={() => setPage((p) => p + 1)}
+                  >
+                    Next
                   </Button>
                 </div>
-              ))}
-            </div>
+              </div>
+            </>
           )}
         </div>
       </Card>

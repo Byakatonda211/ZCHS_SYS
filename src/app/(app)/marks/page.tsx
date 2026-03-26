@@ -5,7 +5,6 @@ import {
   type ClassDef,
   type Term,
   type AcademicYear,
-  type AssessmentDef,
   type Subject,
   type SubjectPaper,
 } from "@/lib/store";
@@ -29,17 +28,48 @@ type StudentRow = {
   streamId: string | null;
 };
 
-type SavedMarkRow = { studentId: string; scoreRaw: number };
+type SavedMarkRow = { studentId: string; scoreRaw: number | null };
 
-// ✅ IMPORTANT: include assessmentId in key so drafts don't leak across assessments
+type AssessmentApi = {
+  id: string;
+  code: string;
+  name: string;
+  level?: "O_LEVEL" | "A_LEVEL";
+  type?: "MIDTERM" | "ENDTERM";
+  isActive?: boolean;
+};
+
+type StudentsResponse =
+  | StudentRow[]
+  | {
+      items?: StudentRow[];
+      total?: number;
+      page?: number;
+      totalPages?: number;
+    };
+
+type SchemeComponent = {
+  assessmentId: string;
+  enterOutOf: number;
+  weightOutOf: number;
+};
+
+type SchemeApi = {
+  id: string;
+  reportType: string;
+  name: string;
+  components: SchemeComponent[];
+};
+
 function keyFor(studentId: string, assessmentId: string, subjectId: string, paperId?: string) {
   return `${studentId}|${assessmentId}|${subjectId}|${paperId ?? ""}`;
 }
 
 async function apiGetJSON<T>(url: string): Promise<T> {
-  const res = await fetch(url, { method: "GET" });
-  if (!res.ok) throw new Error(`GET ${url} failed: ${res.status}`);
-  return res.json();
+  const res = await fetch(url, { method: "GET", cache: "no-store" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as any)?.error || `GET ${url} failed: ${res.status}`);
+  return data;
 }
 
 async function apiPostJSON<T>(url: string, body: any): Promise<T> {
@@ -53,7 +83,6 @@ async function apiPostJSON<T>(url: string, body: any): Promise<T> {
   return data;
 }
 
-// ✅ Sort A–Z by FIRST NAME (then last, other, admission as tie-breakers)
 function compareStudentsByFirstName(a: StudentRow, b: StudentRow) {
   const aFirst = (a.firstName || "").trim().toLowerCase();
   const bFirst = (b.firstName || "").trim().toLowerCase();
@@ -72,11 +101,30 @@ function compareStudentsByFirstName(a: StudentRow, b: StudentRow) {
   return aAdm.localeCompare(bAdm);
 }
 
+function studentsFromResponse(data: StudentsResponse): StudentRow[] {
+  if (Array.isArray(data)) return data;
+  return Array.isArray(data?.items) ? data.items : [];
+}
+
+function round2(n: number) {
+  return Math.round(n * 100) / 100;
+}
+
+function formatDecimalInput(value: number | null | undefined) {
+  if (value === null || value === undefined || Number.isNaN(value)) return "";
+  const s = value.toFixed(2);
+  return s.replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
+}
+
+function hasAtMostTwoDecimals(v: number) {
+  return Math.abs(v - round2(v)) < 1e-9;
+}
+
 export default function MarksPage() {
   const [classes, setClasses] = React.useState<ClassDef[]>([]);
   const [years, setYears] = React.useState<AcademicYear[]>([]);
   const [terms, setTerms] = React.useState<Term[]>([]);
-  const [assessments, setAssessments] = React.useState<AssessmentDef[]>([]);
+  const [assessments, setAssessments] = React.useState<AssessmentApi[]>([]);
 
   const [classId, setClassId] = React.useState<string>("");
   const [termId, setTermId] = React.useState<string>("");
@@ -94,9 +142,9 @@ export default function MarksPage() {
   const [drafts, setDrafts] = React.useState<Record<string, string>>({});
   const [saving, setSaving] = React.useState(false);
 
-  // saved marks loaded from DB
   const [savedMap, setSavedMap] = React.useState<Record<string, number>>({});
   const [savedVersion, setSavedVersion] = React.useState(0);
+  const [enterOutOf, setEnterOutOf] = React.useState(100);
 
   const currentYear = React.useMemo(
     () => years.find((y: any) => y.isCurrent) ?? years[0] ?? null,
@@ -109,6 +157,22 @@ export default function MarksPage() {
   );
 
   const aLevel = selectedClass ? isALevelClass((selectedClass as any).name) : false;
+  const selectedLevel = aLevel ? "A_LEVEL" : "O_LEVEL";
+
+  const visibleAssessments = React.useMemo(() => {
+    const filtered = (assessments || []).filter((a) => {
+      if (!a.isActive && a.isActive !== undefined) return false;
+      if (!a.level) return true;
+      return a.level === selectedLevel;
+    });
+
+    return filtered.sort((a, b) => (a.code || "").localeCompare(b.code || ""));
+  }, [assessments, selectedLevel]);
+
+  const selectedAssessment = React.useMemo(
+    () => visibleAssessments.find((a) => a.id === assessmentId) ?? null,
+    [visibleAssessments, assessmentId]
+  );
 
   React.useEffect(() => {
     let cancelled = false;
@@ -119,24 +183,23 @@ export default function MarksPage() {
           apiGetJSON<any[]>("/api/classes"),
           apiGetJSON<any[]>("/api/academic-years"),
           apiGetJSON<any[]>("/api/terms"),
-          // ✅ only active assessments for teachers
-          apiGetJSON<any[]>("/api/assessments?activeOnly=1"),
+          apiGetJSON<AssessmentApi[]>("/api/assessments?activeOnly=1"),
         ]);
 
         if (cancelled) return;
 
         const clsSorted = (cls || []).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-        const asActive = (as || []).filter((x) => x.isActive !== false);
 
         setClasses(clsSorted);
         setYears(yrs || []);
         setTerms(t || []);
-        setAssessments(asActive);
+        setAssessments(as || []);
 
-        setClassId(clsSorted[0]?.id ?? "");
+        const firstClass = clsSorted[0]?.id ?? "";
+        setClassId(firstClass);
+
         const ct = (t || []).find((x: any) => x.isCurrent) ?? (t || [])[0];
         setTermId(ct?.id ?? "");
-        setAssessmentId(asActive[0]?.id ?? "");
       } catch {
         if (cancelled) return;
         setClasses([]);
@@ -152,35 +215,50 @@ export default function MarksPage() {
   }, []);
 
   React.useEffect(() => {
+    const first = visibleAssessments[0]?.id ?? "";
+    if (!visibleAssessments.some((a) => a.id === assessmentId)) {
+      setAssessmentId(first);
+    }
+  }, [visibleAssessments, assessmentId]);
+
+  React.useEffect(() => {
     if (!classId) return;
 
     let cancelled = false;
 
     (async () => {
       try {
-        const [stu, subs] = await Promise.all([
-          apiGetJSON<StudentRow[]>(`/api/students?classId=${encodeURIComponent(classId)}`),
+        const [stuResp, subs] = await Promise.all([
+          apiGetJSON<StudentsResponse>(`/api/students?classId=${encodeURIComponent(classId)}&page=1&pageSize=100`),
           apiGetJSON<Subject[]>(`/api/subjects?classId=${encodeURIComponent(classId)}`),
         ]);
 
         if (cancelled) return;
 
+        const stu = studentsFromResponse(stuResp);
+
         setStudents(stu || []);
         setSubjects(subs || []);
 
-        const map: Record<string, SubjectPaper[]> = {};
-        for (const s of subs || []) {
-          try {
-            const papers = await apiGetJSON<SubjectPaper[]>(
-              `/api/subjects/${encodeURIComponent(s.id)}/papers`
-            );
-            map[s.id] = papers || [];
-          } catch {
-            map[s.id] = [];
-          }
-        }
+        const papersResults = await Promise.all(
+          (subs || []).map(async (s) => {
+            try {
+              const papers = await apiGetJSON<SubjectPaper[]>(
+                `/api/subjects/${encodeURIComponent(s.id)}/papers`
+              );
+              return [s.id, papers || []] as const;
+            } catch {
+              return [s.id, []] as const;
+            }
+          })
+        );
 
         if (cancelled) return;
+
+        const map: Record<string, SubjectPaper[]> = {};
+        for (const [subjectKey, papers] of papersResults) {
+          map[subjectKey] = papers;
+        }
         setPapersBySubject(map);
 
         const firstSub = (subs || [])[0]?.id ?? "";
@@ -213,9 +291,6 @@ export default function MarksPage() {
     setPaperId(first);
   }, [aLevel, subjectId, papersBySubject]);
 
-  
-  // ✅ Re-fetch students filtered by selected subject (only enrolled students should appear)
-  // NOTE: No UI changes — just data filtering via existing /api/students?subjectId=
   React.useEffect(() => {
     if (!classId) return;
 
@@ -225,15 +300,14 @@ export default function MarksPage() {
       try {
         const url =
           subjectId && subjectId.trim()
-            ? `/api/students?classId=${encodeURIComponent(classId)}&subjectId=${encodeURIComponent(subjectId)}`
-            : `/api/students?classId=${encodeURIComponent(classId)}`;
+            ? `/api/students?classId=${encodeURIComponent(classId)}&subjectId=${encodeURIComponent(subjectId)}&page=1&pageSize=100`
+            : `/api/students?classId=${encodeURIComponent(classId)}&page=1&pageSize=100`;
 
-        const stu = await apiGetJSON<StudentRow[]>(url);
+        const stuResp = await apiGetJSON<StudentsResponse>(url);
         if (cancelled) return;
-        setStudents(stu || []);
+        setStudents(studentsFromResponse(stuResp) || []);
       } catch {
         if (cancelled) return;
-        // keep behavior safe: show none if fetch fails
         setStudents([]);
       }
     })();
@@ -243,7 +317,44 @@ export default function MarksPage() {
     };
   }, [classId, subjectId]);
 
-// ✅ Filter + sort by FIRST NAME A–Z
+  React.useEffect(() => {
+    if (!selectedAssessment) {
+      setEnterOutOf(100);
+      return;
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const reportType =
+          selectedLevel === "A_LEVEL"
+            ? selectedAssessment.type === "ENDTERM"
+              ? "A_EOT"
+              : "A_MID"
+            : selectedAssessment.type === "ENDTERM"
+            ? "O_EOT"
+            : "O_MID";
+
+        const scheme = await apiGetJSON<SchemeApi | null>(
+          `/api/schemes?reportType=${encodeURIComponent(reportType)}`
+        );
+
+        if (cancelled) return;
+
+        const schemeComponent = scheme?.components?.find((c) => c.assessmentId === selectedAssessment.id);
+        setEnterOutOf(Number(schemeComponent?.enterOutOf ?? 100));
+      } catch {
+        if (cancelled) return;
+        setEnterOutOf(100);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedAssessment, selectedLevel]);
+
   const filteredStudents = React.useMemo(() => {
     const q = studentQuery.trim().toLowerCase();
 
@@ -276,10 +387,10 @@ export default function MarksPage() {
     if (!v.trim()) return { ok: true, val: null as number | null };
     const n = Number(v);
     if (!Number.isFinite(n)) return { ok: false, msg: "Invalid number" };
-    const i = Math.trunc(n);
-    if (i < 0) return { ok: false, msg: "Too low" };
-    if (i > 100) return { ok: false, msg: "Too high" };
-    return { ok: true, val: i };
+    if (!hasAtMostTwoDecimals(n)) return { ok: false, msg: "Use at most 2 decimal places" };
+    if (n < 0) return { ok: false, msg: "Too low" };
+    if (n > enterOutOf) return { ok: false, msg: `Must be 0-${formatDecimalInput(enterOutOf)}` };
+    return { ok: true, val: round2(n) };
   }
 
   const draftCountForCurrentSelection = React.useMemo(() => {
@@ -289,7 +400,6 @@ export default function MarksPage() {
     return Object.keys(drafts).filter((k) => k.endsWith(suffix) && drafts[k].trim() !== "").length;
   }, [drafts, assessmentId, subjectId, paperId, aLevel]);
 
-  // Load saved marks for current selection
   React.useEffect(() => {
     const y = currentYear?.id ?? "";
     if (!y || !termId || !assessmentId || !classId || !subjectId) {
@@ -317,7 +427,9 @@ export default function MarksPage() {
         if (cancelled) return;
 
         const map: Record<string, number> = {};
-        for (const r of rows || []) map[r.studentId] = r.scoreRaw;
+        for (const r of rows || []) {
+          if (typeof r.scoreRaw === "number") map[r.studentId] = r.scoreRaw;
+        }
         setSavedMap(map);
       } catch {
         if (cancelled) return;
@@ -352,7 +464,7 @@ export default function MarksPage() {
       }
       if (chk.val === null || chk.val === undefined) continue;
 
-      entries.push({ studentId: s.id, scoreRaw: chk.val ?? 0 });
+      entries.push({ studentId: s.id, scoreRaw: chk.val });
     }
 
     setErrors((prev) => ({ ...prev, ...newErrors }));
@@ -370,7 +482,6 @@ export default function MarksPage() {
         entries,
       });
 
-      // clear drafts for current selection only
       setDrafts((d) => {
         const copy = { ...d };
         for (const e of entries) {
@@ -380,7 +491,6 @@ export default function MarksPage() {
         return copy;
       });
 
-      // refresh saved marks so they appear immediately
       setSavedVersion((v) => v + 1);
     } finally {
       setSaving(false);
@@ -390,7 +500,7 @@ export default function MarksPage() {
   return (
     <div className="space-y-4">
       <Card>
-        <CardHeader title="Enter Marks" subtitle="Select class, term, assessment & subject then enter marks" />
+        <CardHeader title="Enter Marks" subtitle="Select class, term, assessment and subject, then enter marks" />
         <div className="p-4 grid grid-cols-1 md:grid-cols-6 gap-3">
           <div className="space-y-1 md:col-span-2">
             <Label>Class</Label>
@@ -415,7 +525,7 @@ export default function MarksPage() {
             <Select
               value={assessmentId}
               onChange={(e: any) => setAssessmentId(e.target.value)}
-              options={assessments.map((a: any) => ({
+              options={visibleAssessments.map((a: any) => ({
                 value: a.id,
                 label: a.code ? `${a.code} — ${a.name}` : a.name,
               }))}
@@ -458,6 +568,13 @@ export default function MarksPage() {
               placeholder="Type name or admission no..."
             />
           </div>
+
+          <div className="space-y-1 md:col-span-2">
+            <Label>Allowed Entry</Label>
+            <div className="h-10 flex items-center">
+              <Badge>Enter out of {formatDecimalInput(enterOutOf)}</Badge>
+            </div>
+          </div>
         </div>
       </Card>
 
@@ -467,9 +584,8 @@ export default function MarksPage() {
           subtitle={
             <div className="flex items-center gap-2">
               <Badge>{filteredStudents.length} students</Badge>
-              {draftCountForCurrentSelection > 0 ? (
-                <Badge>{draftCountForCurrentSelection} entered</Badge>
-              ) : null}
+              {draftCountForCurrentSelection > 0 ? <Badge>{draftCountForCurrentSelection} entered</Badge> : null}
+              <Badge>{selectedLevel === "A_LEVEL" ? "A-Level assessments" : "O-Level assessments"}</Badge>
             </div>
           }
         />
@@ -482,21 +598,23 @@ export default function MarksPage() {
               drafts[k] !== undefined
                 ? drafts[k]
                 : savedMap[s.id] !== undefined
-                ? String(savedMap[s.id])
+                ? formatDecimalInput(savedMap[s.id])
                 : "";
 
             return (
               <div key={s.id} className="flex items-center gap-3 border rounded p-2">
                 <div className="flex-1">
                   <div className="font-semibold text-slate-900">
-                    {/* ✅ Hide admission number on small screens, show on md+ */}
                     {s.admissionNo ? <span className="hidden md:inline">{s.admissionNo} — </span> : null}
                     {s.firstName} {s.lastName} {s.otherNames ?? ""}
                   </div>
                 </div>
 
-                <div className="w-32">
+                <div className="w-36">
                   <Input
+                    type="number"
+                    step="0.01"
+                    min="0"
                     value={display}
                     onChange={(e: any) => {
                       setDraft(k, e.target.value);
@@ -504,7 +622,7 @@ export default function MarksPage() {
                       if (!chk.ok) setErr(k, chk.msg || "Invalid");
                       else clearErr(k);
                     }}
-                    placeholder=""
+                    placeholder={`0-${formatDecimalInput(enterOutOf)}`}
                   />
                   {errors[k] ? <div className="text-xs text-red-600 mt-1">{errors[k]}</div> : null}
                 </div>
@@ -514,10 +632,7 @@ export default function MarksPage() {
         </div>
 
         <div className="p-4 pt-0 flex justify-end">
-          <Button
-            onClick={saveAll}
-            disabled={saving || draftCountForCurrentSelection === 0 || !assessmentId}
-          >
+          <Button onClick={saveAll} disabled={saving || draftCountForCurrentSelection === 0 || !assessmentId}>
             {saving ? "Saving..." : "Save All"}
           </Button>
         </div>

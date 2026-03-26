@@ -136,7 +136,6 @@ model Student {
   residenceSection      ResidenceSection?
   enrollments           Enrollment[]
   marks                 MarkEntry[]
-  
 
   @@index([isActive])
   @@index([lastName, firstName])
@@ -206,19 +205,21 @@ model SubjectPaper {
 }
 
 model ReportScheme {
-  id         String                  @id @default(uuid())
-  reportType ReportType              @unique
-  name       String
-  createdAt  DateTime                @default(now())
-  components ReportSchemeComponent[]
+  id               String                        @id @default(uuid())
+  reportType       ReportType                    @unique
+  name             String
+  createdAt        DateTime                      @default(now())
+  components       ReportSchemeComponent[]
+  gradeDescriptors ReportSchemeGradeDescriptor[]
 }
 
 model ReportSchemeComponent {
-  id                     String @id @default(uuid())
+  id                     String   @id @default(uuid())
   schemeId               String
   assessmentDefinitionId String
-  weightOutOf            Int
-  order                  Int    @default(1)
+  enterOutOf             Decimal  @default(100.00) @db.Decimal(8, 2)
+  weightOutOf            Decimal  @db.Decimal(8, 2)
+  order                  Int      @default(1)
 
   scheme     ReportScheme         @relation(fields: [schemeId], references: [id], onDelete: Cascade)
   assessment AssessmentDefinition @relation(fields: [assessmentDefinitionId], references: [id], onDelete: Restrict)
@@ -228,9 +229,27 @@ model ReportSchemeComponent {
   @@index([assessmentDefinitionId])
 }
 
+model ReportSchemeGradeDescriptor {
+  id               String   @id @default(uuid())
+  schemeId         String
+  grade            String
+  achievementLevel String
+  minMark          Decimal  @db.Decimal(8, 2)
+  maxMark          Decimal  @db.Decimal(8, 2)
+  descriptor       String
+  order            Int      @default(1)
+  createdAt        DateTime @default(now())
+
+  scheme ReportScheme @relation(fields: [schemeId], references: [id], onDelete: Cascade)
+
+  @@index([schemeId])
+  @@unique([schemeId, grade])
+  @@unique([schemeId, order])
+}
+
 /// *
 /// * Defines how reports/marks entry work.
-/// * Components store weighting, while teachers always enter raw scores out of 100.
+/// * Components store weighting, while teachers always enter raw scores against the chosen scheme component entry scale.
 model AssessmentDefinition {
   id               String                  @id @default(uuid())
   level            Level
@@ -263,7 +282,7 @@ model AssessmentComponent {
 }
 
 /// *
-/// * Marks: always raw 0-100 entered by a teacher/admin.
+/// * Marks can now store up to 2 decimal places.
 /// * For A-Level, subjectPaperId is set; for O-Level it's null.
 model MarkEntry {
   id              String              @id @default(uuid())
@@ -274,7 +293,7 @@ model MarkEntry {
   subjectId       String
   subjectPaperId  String?
   componentId     String
-  scoreRaw        Int
+  scoreRaw        Decimal             @db.Decimal(8, 2)
   createdByUserId String?
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt
@@ -332,7 +351,6 @@ model TeachingAssignment {
 
 /// *
 /// * Remarks rules (generated suggestions) and later overrides.
-/// * We'll wire this into report cards after marks computations.
 model RemarkRule {
   id        String     @id @default(uuid())
   type      RemarkType

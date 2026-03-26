@@ -35,9 +35,20 @@ type StudentApiRow = {
   }>;
 };
 
+type GradeDescriptorRow = {
+  id?: string;
+  grade: string;
+  achievementLevel: string;
+  minMark: number;
+  maxMark: number;
+  descriptor: string;
+  order?: number;
+};
+
 type SchemeComponent = {
   assessmentId: string;
   label: string;
+  enterOutOf: number;
   weightOutOf: number;
   order?: number;
 };
@@ -47,11 +58,12 @@ type SchemeApiRow = {
   reportType: string;
   name: string;
   components: SchemeComponent[];
+  gradeDescriptors?: GradeDescriptorRow[];
 };
 
 type MarksRow = {
   studentId: string;
-  scoreRaw: number | null;
+  scoreRaw: number | string | null;
 };
 
 type SubjectReportRow = {
@@ -61,6 +73,7 @@ type SubjectReportRow = {
     assessmentId: string;
     label: string;
     shortLabel: string;
+    enterOutOf: number;
     weightOutOf: number;
     rawScore: number | null;
     weightedScore: number | null;
@@ -81,51 +94,66 @@ type TermRow = {
   name: string;
 };
 
-const GRADE_DESCRIPTORS = [
+const DEFAULT_O_LEVEL_DESCRIPTORS: GradeDescriptorRow[] = [
   {
     grade: "A",
-    level: "Exceptional",
-    range: "85+",
+    achievementLevel: "Exceptional",
+    minMark: 85.0,
+    maxMark: 100.0,
     descriptor:
       "Demonstrates an extraordinary level of competency by applying innovatively and creatively the acquired knowledge and skills in real-life situations.",
+    order: 1,
   },
   {
     grade: "B",
-    level: "Outstanding",
-    range: "70 – 84",
+    achievementLevel: "Outstanding",
+    minMark: 70.0,
+    maxMark: 84.99,
     descriptor:
       "Demonstrates a high level of competency by applying the acquired knowledge and skills in real-life situations.",
+    order: 2,
   },
   {
     grade: "C",
-    level: "Satisfactory",
-    range: "50 – 69",
+    achievementLevel: "Satisfactory",
+    minMark: 50.0,
+    maxMark: 69.99,
     descriptor:
       "Demonstrates an adequate level of competency by applying the acquired knowledge and skills in real-life situations.",
+    order: 3,
   },
   {
     grade: "D",
-    level: "Basic",
-    range: "25 – 49",
+    achievementLevel: "Basic",
+    minMark: 25.0,
+    maxMark: 49.99,
     descriptor:
       "Demonstrates a minimum level of competency in applying the acquired knowledge and skills in real-life situations.",
+    order: 4,
   },
   {
     grade: "E",
-    level: "Elementary",
-    range: "0 – 24",
+    achievementLevel: "Elementary",
+    minMark: 0.0,
+    maxMark: 24.99,
     descriptor:
       "Demonstrates below the basic level of competency in applying the acquired knowledge and skills in real-life situations.",
+    order: 5,
   },
 ];
 
-function gradeScore(score: number | null) {
+function round2(v: any) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  return Math.round(n * 100) / 100;
+}
+
+function gradeScore(score: number | null, descriptors: GradeDescriptorRow[]) {
   if (score === null) return "—";
-  if (score >= 85) return "A";
-  if (score >= 70) return "B";
-  if (score >= 50) return "C";
-  if (score >= 25) return "D";
-  return "E";
+  const found = (descriptors || []).find(
+    (d) => Number(score) >= Number(d.minMark) && Number(score) <= Number(d.maxMark)
+  );
+  return found?.grade || "—";
 }
 
 function safeFileName(name: string) {
@@ -134,7 +162,8 @@ function safeFileName(name: string) {
 
 function formatMark(value: number | null) {
   if (value === null || Number.isNaN(value)) return "—";
-  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+  const s = value.toFixed(2);
+  return s.replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
 }
 
 function toShortAssessmentLabel(_label: string, index: number) {
@@ -181,6 +210,7 @@ export default function StudentReportCardPage() {
   const yearId = sp.get("yearId") || "";
   const termId = sp.get("termId") || "";
   const rawReportType = sp.get("reportType");
+
   const reportType: ReportType =
     rawReportType === "O_MID" ||
     rawReportType === "O_EOT" ||
@@ -188,6 +218,7 @@ export default function StudentReportCardPage() {
     rawReportType === "A_EOT"
       ? rawReportType
       : "O_EOT";
+
   const [loading, setLoading] = React.useState(true);
   const [downloading, setDownloading] = React.useState(false);
   const [error, setError] = React.useState("");
@@ -195,11 +226,14 @@ export default function StudentReportCardPage() {
   const [student, setStudent] = React.useState<StudentApiRow | null>(null);
   const [scheme, setScheme] = React.useState<SchemeApiRow | null>(null);
   const [rows, setRows] = React.useState<SubjectReportRow[]>([]);
+  const [gradeDescriptors, setGradeDescriptors] = React.useState<GradeDescriptorRow[]>(
+    DEFAULT_O_LEVEL_DESCRIPTORS
+  );
 
   type ActiveEnrollment = NonNullable<StudentApiRow["enrollments"]>[number];
 
   const [activeEnrollment, setActiveEnrollment] =
-  React.useState<ActiveEnrollment | null>(null);
+    React.useState<ActiveEnrollment | null>(null);
 
   const [academicYearName, setAcademicYearName] = React.useState("");
   const [termName, setTermName] = React.useState("");
@@ -275,8 +309,19 @@ export default function StudentReportCardPage() {
             (component: SchemeComponent, index: number) => ({
               ...component,
               label: component.label || `Assessment ${index + 1}`,
+              enterOutOf: Number(component.enterOutOf ?? 100),
+              weightOutOf: Number(component.weightOutOf ?? 0),
             })
           ),
+          gradeDescriptors:
+            Array.isArray(schemeData.gradeDescriptors) &&
+            schemeData.gradeDescriptors.length > 0
+              ? schemeData.gradeDescriptors.map((g: any) => ({
+                  ...g,
+                  minMark: Number(g.minMark),
+                  maxMark: Number(g.maxMark),
+                }))
+              : DEFAULT_O_LEVEL_DESCRIPTORS,
         };
 
         const foundYear = (Array.isArray(yearsData) ? yearsData : []).find(
@@ -314,54 +359,55 @@ export default function StudentReportCardPage() {
         const provisionalRows: Omit<SubjectReportRow, "teacherComment">[] = [];
 
         for (const subject of enrolledSubjects) {
-          const componentScores: SubjectReportRow["componentScores"] = [];
+          const componentMarks = await Promise.all(
+            loadedScheme.components.map(async (component: SchemeComponent, i: number) => {
+              const params = new URLSearchParams({
+                academicYearId: yearId,
+                termId,
+                assessmentDefinitionId: component.assessmentId,
+                classId: loadedActiveEnrollment.classId,
+                subjectId: subject.subjectId,
+              });
 
-          for (let i = 0; i < loadedScheme.components.length; i++) {
-            const component = loadedScheme.components[i];
+              const marksRes = await fetch(`/api/marks?${params.toString()}`, {
+                cache: "no-store",
+                credentials: "include",
+              });
+              const marksData = await marksRes.json();
 
-            const params = new URLSearchParams({
-              academicYearId: yearId,
-              termId,
-              assessmentDefinitionId: component.assessmentId,
-              classId: loadedActiveEnrollment.classId,
-              subjectId: subject.subjectId,
-            });
+              if (!marksRes.ok) {
+                throw new Error(
+                  marksData?.error || `Failed to load marks for ${subject.subjectName}`
+                );
+              }
 
-            const marksRes = await fetch(`/api/marks?${params.toString()}`, {
-              cache: "no-store",
-              credentials: "include",
-            });
-            const marksData = await marksRes.json();
+              const studentMark = Array.isArray(marksData)
+                ? (marksData as MarksRow[]).find((m) => m.studentId === studentId)
+                : null;
 
-            if (!marksRes.ok) {
-              throw new Error(
-                marksData?.error || `Failed to load marks for ${subject.subjectName}`
-              );
-            }
+              const rawScore = round2(studentMark?.scoreRaw);
 
-            const studentMark = Array.isArray(marksData)
-              ? (marksData as MarksRow[]).find((m) => m.studentId === studentId)
-              : null;
+              const enterOutOf = Number(component.enterOutOf ?? 100);
+              const weightOutOf = Number(component.weightOutOf ?? 0);
 
-            const rawScore =
-              typeof studentMark?.scoreRaw === "number" ? studentMark.scoreRaw : null;
+              const weightedScore =
+                rawScore === null
+                  ? null
+                  : round2((rawScore * weightOutOf) / Math.max(enterOutOf, 0.01));
 
-            const weightedScore =
-              rawScore === null
-                ? null
-                : Number(
-                    ((rawScore * Number(component.weightOutOf || 0)) / 100).toFixed(1)
-                  );
+              return {
+                assessmentId: component.assessmentId,
+                label: component.label,
+                shortLabel: toShortAssessmentLabel(component.label, i),
+                enterOutOf,
+                weightOutOf,
+                rawScore,
+                weightedScore,
+              };
+            })
+          );
 
-            componentScores.push({
-              assessmentId: component.assessmentId,
-              label: component.label,
-              shortLabel: toShortAssessmentLabel(component.label, i),
-              weightOutOf: Number(component.weightOutOf || 0),
-              rawScore,
-              weightedScore,
-            });
-          }
+          const componentScores = componentMarks;
 
           const weightedValues = componentScores
             .map((c) => c.weightedScore)
@@ -369,14 +415,14 @@ export default function StudentReportCardPage() {
 
           const total =
             weightedValues.length > 0
-              ? Number(weightedValues.reduce((sum, value) => sum + value, 0).toFixed(1))
+              ? round2(weightedValues.reduce((sum, value) => sum + value, 0))
               : null;
 
           provisionalRows.push({
             subjectId: subject.subjectId,
             subjectName: subject.subjectName,
             total,
-            grade: gradeScore(total),
+            grade: gradeScore(total, loadedScheme.gradeDescriptors || DEFAULT_O_LEVEL_DESCRIPTORS),
             teacherInitials: teacherMap[subject.subjectId] || "—",
             componentScores,
           });
@@ -388,10 +434,13 @@ export default function StudentReportCardPage() {
 
         const overallAverage =
           totals.length > 0
-            ? Number((totals.reduce((sum, v) => sum + v, 0) / totals.length).toFixed(1))
+            ? round2(totals.reduce((sum, v) => sum + v, 0) / totals.length)
             : null;
 
-        const overallGrade = gradeScore(overallAverage);
+        const overallGrade = gradeScore(
+          overallAverage,
+          loadedScheme.gradeDescriptors || DEFAULT_O_LEVEL_DESCRIPTORS
+        );
 
         const override = getRemarkOverride({
           studentId,
@@ -430,6 +479,7 @@ export default function StudentReportCardPage() {
         setStudent(loadedStudent);
         setActiveEnrollment(loadedActiveEnrollment);
         setScheme(loadedScheme);
+        setGradeDescriptors(loadedScheme.gradeDescriptors || DEFAULT_O_LEVEL_DESCRIPTORS);
         setRows(subjectRows);
         setAcademicYearName(foundYear?.name || yearId);
         setTermName(foundTerm?.name || termId);
@@ -440,6 +490,7 @@ export default function StudentReportCardPage() {
           setStudent(null);
           setActiveEnrollment(null);
           setScheme(null);
+          setGradeDescriptors(DEFAULT_O_LEVEL_DESCRIPTORS);
           setRows([]);
           setAcademicYearName("");
           setTermName("");
@@ -468,10 +519,10 @@ export default function StudentReportCardPage() {
 
   const overallAverage =
     totals.length > 0
-      ? Number((totals.reduce((sum, v) => sum + v, 0) / totals.length).toFixed(1))
+      ? round2(totals.reduce((sum, v) => sum + v, 0) / totals.length)
       : null;
 
-  const overallGrade = gradeScore(overallAverage);
+  const overallGrade = gradeScore(overallAverage, gradeDescriptors);
 
   const bestRow =
     rows
@@ -674,7 +725,7 @@ export default function StudentReportCardPage() {
 
       for (let i = 0; i < scheme.components.length; i++) {
         const component = scheme.components[i];
-        drawCell(`CA ${i + 1}\n(Out of ${component.weightOutOf})`, x, y, componentW, 9.5, {
+        drawCell(`CA ${i + 1}\n(Out of ${formatMark(component.weightOutOf)})`, x, y, componentW, 9.5, {
           bold: true,
           fill: true,
           align: "center",
@@ -779,10 +830,13 @@ export default function StudentReportCardPage() {
       });
       y += 8;
 
-      for (const g of GRADE_DESCRIPTORS) {
+      for (const g of gradeDescriptors) {
         drawCell(g.grade, left, y, gd1, 9.5, { align: "center", bold: true, size: 7.8 });
-        drawCell(g.level, left + gd1, y, gd2, 9.5, { size: 7.3 });
-        drawCell(g.range, left + gd1 + gd2, y, gd3, 9.5, { align: "center", size: 7.3 });
+        drawCell(g.achievementLevel, left + gd1, y, gd2, 9.5, { size: 7.3 });
+        drawCell(`${formatMark(g.minMark)} - ${formatMark(g.maxMark)}`, left + gd1 + gd2, y, gd3, 9.5, {
+          align: "center",
+          size: 7.3,
+        });
         drawCell(g.descriptor, left + gd1 + gd2 + gd3, y, gd4, 9.5, { size: 7.0 });
         y += 9.5;
       }
@@ -815,6 +869,7 @@ export default function StudentReportCardPage() {
   }
 
   const componentHeaders = scheme?.components || [];
+
   return (
     <div className="mx-auto max-w-6xl space-y-4 p-4">
       <Card>
@@ -900,7 +955,7 @@ export default function StudentReportCardPage() {
                   <th key={component.assessmentId} className="px-1 py-2 text-center font-bold">
                     <div>{`CA ${index + 1}`}</div>
                     <div className="text-[9px] font-medium text-slate-500">
-                      {`(Out of ${component.weightOutOf})`}
+                      {`(Out of ${formatMark(component.weightOutOf)})`}
                     </div>
                   </th>
                 ))}
@@ -956,11 +1011,11 @@ export default function StudentReportCardPage() {
               </tr>
             </thead>
             <tbody>
-              {GRADE_DESCRIPTORS.map((item, index) => (
-                <tr key={item.grade} className={index % 2 === 0 ? "bg-white" : "bg-slate-50/70"}>
+              {gradeDescriptors.map((item, index) => (
+                <tr key={`${item.grade}-${index}`} className={index % 2 === 0 ? "bg-white" : "bg-slate-50/70"}>
                   <td className="px-2 py-2 font-bold">{item.grade}</td>
-                  <td className="px-2 py-2 font-semibold">{item.level}</td>
-                  <td className="px-2 py-2">{item.range}</td>
+                  <td className="px-2 py-2 font-semibold">{item.achievementLevel}</td>
+                  <td className="px-2 py-2">{`${formatMark(item.minMark)} - ${formatMark(item.maxMark)}`}</td>
                   <td className="px-2 py-2 leading-4">{item.descriptor}</td>
                 </tr>
               ))}

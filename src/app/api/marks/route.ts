@@ -2,7 +2,11 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 
-async function canViewMarks(user: { id: string; role: string }, classId: string, subjectId: string) {
+async function canViewMarks(
+  user: { id: string; role: string },
+  classId: string,
+  subjectId: string
+) {
   if (user.role === "ADMIN") return true;
 
   const assignments = await prisma.teachingAssignment.findMany({
@@ -11,12 +15,14 @@ async function canViewMarks(user: { id: string; role: string }, classId: string,
   });
 
   if (assignments.length === 0) return false;
-
-  // ✅ Class Teacher for this class can view all subjects
   if (assignments.some((a) => a.isClassTeacher)) return true;
-
-  // ✅ Otherwise only assigned subject(s)
   return assignments.some((a) => a.subjectId === subjectId);
+}
+
+function round2(v: any) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  return Math.round(n * 100) / 100;
 }
 
 export async function GET(req: Request) {
@@ -32,7 +38,9 @@ export async function GET(req: Request) {
     const subjectId = (searchParams.get("subjectId") || "").trim();
     const subjectPaperIdRaw = searchParams.get("subjectPaperId");
     const subjectPaperId =
-      subjectPaperIdRaw !== null && subjectPaperIdRaw !== undefined && String(subjectPaperIdRaw).trim()
+      subjectPaperIdRaw !== null &&
+      subjectPaperIdRaw !== undefined &&
+      String(subjectPaperIdRaw).trim()
         ? String(subjectPaperIdRaw).trim()
         : null;
 
@@ -40,7 +48,6 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "Missing required query params" }, { status: 400 });
     }
 
-    // ✅ RBAC: only allowed teachers can view marks for this class/subject
     const allowed = await canViewMarks(user, classId, subjectId);
     if (!allowed) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
 
@@ -58,7 +65,7 @@ export async function GET(req: Request) {
         termId,
         componentId: component.id,
         subjectId,
-        subjectPaperId, // can be null
+        subjectPaperId,
         enrollment: {
           isActive: true,
           academicYearId,
@@ -71,7 +78,12 @@ export async function GET(req: Request) {
       },
     });
 
-    return NextResponse.json(rows);
+    return NextResponse.json(
+      rows.map((r) => ({
+        studentId: r.studentId,
+        scoreRaw: round2(r.scoreRaw),
+      }))
+    );
   } catch (e: any) {
     const msg = e?.message || "Error";
     const code = msg === "UNAUTHENTICATED" ? 401 : msg === "FORBIDDEN" ? 403 : 500;

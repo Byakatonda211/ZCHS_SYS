@@ -27,8 +27,6 @@ export async function GET(req: Request) {
     await requireUser();
     const { searchParams } = new URL(req.url);
 
-    // ✅ Dashboard stats (students & teachers counts)
-    // This does NOT affect normal listing; it only runs when ?stats=1 is provided.
     if ((searchParams.get("stats") || "").trim() === "1") {
       const [studentsCount, teachersCount] = await Promise.all([
         prisma.student.count(),
@@ -42,92 +40,127 @@ export async function GET(req: Request) {
     const q = (searchParams.get("q") || "").trim();
     const classId = (searchParams.get("classId") || "").trim();
     const streamId = (searchParams.get("streamId") || "").trim();
-
-    // ✅ subject filter (only students registered for subject)
     const subjectId = (searchParams.get("subjectId") || "").trim();
 
-    const students = await prisma.student.findMany({
-      where: {
-        AND: [
-          q
-            ? {
-                OR: [
-                  { firstName: { contains: q, mode: "insensitive" } },
-                  { lastName: { contains: q, mode: "insensitive" } },
-                  { admissionNo: { contains: q, mode: "insensitive" } },
-                ],
-              }
-            : {},
-          classId
-            ? {
-                enrollments: {
-                  some: {
-                    classId,
-                    isActive: true,
+    const page = Math.max(Number(searchParams.get("page") || "1"), 1);
+    const pageSizeRaw = Number(searchParams.get("pageSize") || "25");
+    const pageSize = Math.min(Math.max(pageSizeRaw, 1), 100);
+    const skip = (page - 1) * pageSize;
+
+    const where = {
+      AND: [
+        q
+          ? {
+              OR: [
+                { firstName: { contains: q, mode: "insensitive" as const } },
+                { lastName: { contains: q, mode: "insensitive" as const } },
+                { otherNames: { contains: q, mode: "insensitive" as const } },
+                { admissionNo: { contains: q, mode: "insensitive" as const } },
+              ],
+            }
+          : {},
+        classId
+          ? {
+              enrollments: {
+                some: {
+                  classId,
+                  isActive: true,
+                },
+              },
+            }
+          : {},
+        streamId
+          ? {
+              enrollments: {
+                some: {
+                  streamId,
+                  isActive: true,
+                },
+              },
+            }
+          : {},
+        subjectId
+          ? {
+              enrollments: {
+                some: {
+                  isActive: true,
+                  subjects: {
+                    some: { subjectId },
                   },
                 },
-              }
-            : {},
-          streamId
-            ? {
-                enrollments: {
-                  some: {
-                    streamId,
-                    isActive: true,
-                  },
-                },
-              }
-            : {},
-          subjectId
-            ? {
-                enrollments: {
-                  some: {
-                    isActive: true,
-                    subjects: {
-                      some: { subjectId },
-                    },
-                  },
-                },
-              }
-            : {},
+              },
+            }
+          : {},
+      ],
+    };
+
+    const [total, students] = await Promise.all([
+      prisma.student.count({ where }),
+      prisma.student.findMany({
+        where,
+        orderBy: [
+          { firstName: "asc" },
+          { lastName: "asc" },
+          { createdAt: "desc" },
         ],
-      },
-      orderBy: [{ createdAt: "desc" }],
-      include: {
-        enrollments: {
-          where: { isActive: true },
-          orderBy: [{ createdAt: "desc" }],
-          take: 1,
-          include: {
-            class: true,
-            stream: true,
-            academicYear: true,
-            subjects: { include: { subject: true } },
+        skip,
+        take: pageSize,
+        select: {
+          id: true,
+          admissionNo: true,
+          firstName: true,
+          lastName: true,
+          otherNames: true,
+          gender: true,
+          enrollments: {
+            where: { isActive: true },
+            orderBy: [{ createdAt: "desc" }],
+            take: 1,
+            select: {
+              classId: true,
+              streamId: true,
+              class: {
+                select: {
+                  name: true,
+                },
+              },
+              stream: {
+                select: {
+                  name: true,
+                },
+              },
+            },
           },
         },
-      },
-    });
+      }),
+    ]);
 
-    // Flatten active enrollment to top-level class/stream fields for UI convenience
-    // (Keeps full enrollments array intact for other consumers.)
-    const enriched = students.map((s: any) => {
+    const items = students.map((s) => {
       const enr = Array.isArray(s.enrollments) && s.enrollments.length ? s.enrollments[0] : null;
 
-      const className =
-        enr?.class?.name ?? enr?.class?.title ?? enr?.class?.label ?? null;
-      const streamName =
-        enr?.stream?.name ?? enr?.stream?.title ?? enr?.stream?.label ?? null;
-
       return {
-        ...s,
-        classId: enr?.classId ?? s.classId ?? null,
-        streamId: enr?.streamId ?? s.streamId ?? null,
-        className,
-        streamName,
+        id: s.id,
+        admissionNo: s.admissionNo,
+        firstName: s.firstName,
+        lastName: s.lastName,
+        otherNames: s.otherNames,
+        gender: s.gender,
+        classId: enr?.classId ?? null,
+        streamId: enr?.streamId ?? null,
+        className: enr?.class?.name ?? null,
+        streamName: enr?.stream?.name ?? null,
       };
     });
 
-    return NextResponse.json(enriched);
+    return NextResponse.json({
+      items,
+      page,
+      pageSize,
+      total,
+      totalPages: Math.max(Math.ceil(total / pageSize), 1),
+      hasNextPage: page * pageSize < total,
+      hasPrevPage: page > 1,
+    });
   } catch (e: any) {
     const msg = e?.message || "Error";
     const code = msg === "UNAUTHENTICATED" ? 401 : 500;
@@ -140,7 +173,6 @@ export async function POST(req: Request) {
     await requireUser();
     const body = await req.json();
 
-    // Student core fields
     const admissionNo = toStrOrNull(body?.admissionNo);
     const firstName = String(body?.firstName || "").trim();
     const lastName = String(body?.lastName || "").trim();
@@ -159,14 +191,12 @@ export async function POST(req: Request) {
     const nationality = toStrOrNull(body?.nationality);
     const medicalNotes = toStrOrNull(body?.medicalNotes);
 
-    // PLE fields
     const pleSittingYear = toIntOrNull(body?.pleSittingYear);
     const plePrimarySchool = toStrOrNull(body?.plePrimarySchool);
     const pleIndexNumber = toStrOrNull(body?.pleIndexNumber);
     const pleAggregates = toIntOrNull(body?.pleAggregates);
     const pleDivision = toStrOrNull(body?.pleDivision);
 
-    // Residence / extras
     const village = toStrOrNull(body?.village);
     const parish = toStrOrNull(body?.parish);
     const districtOfResidence = toStrOrNull(body?.districtOfResidence);
@@ -178,19 +208,16 @@ export async function POST(req: Request) {
     const recurrentMedication = toStrOrNull(body?.recurrentMedication);
     const knownDisability = toStrOrNull(body?.knownDisability);
 
-    // Residence Section (DAY | BOARDING)
     const residenceSectionRaw = String(body?.residenceSection ?? "").trim();
     const residenceSection =
       residenceSectionRaw === "DAY" || residenceSectionRaw === "BOARDING"
         ? residenceSectionRaw
         : null;
 
-    // Enrollment fields (required)
     const classId = String(body?.classId || "").trim();
     const streamId = toStrOrNull(body?.streamId);
     const academicYearId = String(body?.academicYearId || "").trim();
 
-    // Selected subjects (optional)
     const enrolledSubjectIds = toStringArray(body?.enrolledSubjectIds);
 
     if (!firstName || !lastName || !classId || !academicYearId) {
@@ -266,7 +293,6 @@ export async function POST(req: Request) {
         } as any,
       });
 
-      // deactivate previous enrollments (should be none for new student, but safe)
       await tx.enrollment.updateMany({
         where: { studentId: student.id, isActive: true },
         data: { isActive: false },
@@ -282,7 +308,6 @@ export async function POST(req: Request) {
         },
       });
 
-      // save selected subjects + compulsory O-Level subjects
       if (finalSubjectIds.length > 0) {
         await tx.enrollmentSubject.createMany({
           data: finalSubjectIds.map((subjectId) => ({

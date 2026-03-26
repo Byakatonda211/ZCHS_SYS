@@ -16,7 +16,6 @@ function splitName(combined: string) {
     const name = parts.slice(1).join(" — ").trim();
     return { code: code || s.toUpperCase(), name: name || code || s };
   }
-  // if no separator, treat whole as code
   return { code: s.toUpperCase(), name: s };
 }
 
@@ -24,6 +23,10 @@ function inferTypeFromCode(code: string) {
   const c = (code || "").toUpperCase();
   if (c.includes("EOT") || c.includes("END") || c.includes("FINAL")) return "ENDTERM";
   return "MIDTERM";
+}
+
+function normalizeLevel(level: unknown): "O_LEVEL" | "A_LEVEL" {
+  return String(level || "").trim().toUpperCase() === "A_LEVEL" ? "A_LEVEL" : "O_LEVEL";
 }
 
 async function ensureDefaultComponent(definitionId: string) {
@@ -45,16 +48,46 @@ async function ensureDefaultComponent(definitionId: string) {
   });
 }
 
+async function upsertDefaultAssessment(level: "O_LEVEL" | "A_LEVEL", code: string, name: string) {
+  const full = combineName(code, name);
+  const type = inferTypeFromCode(code);
+
+  const def = await prisma.assessmentDefinition.upsert({
+    where: {
+      level_type_name: {
+        level: level as any,
+        type: type as any,
+        name: full,
+      },
+    },
+    update: { isActive: true },
+    create: {
+      level: level as any,
+      type: type as any,
+      name: full,
+      isActive: true,
+    },
+    select: { id: true },
+  });
+
+  await ensureDefaultComponent(def.id);
+}
+
 export async function GET(req: Request) {
   try {
     await requireUser();
 
     const { searchParams } = new URL(req.url);
     const activeOnly = (searchParams.get("activeOnly") || "").trim() === "1";
+    const levelParam = (searchParams.get("level") || "").trim().toUpperCase();
+
+    const where: any = {};
+    if (activeOnly) where.isActive = true;
+    if (levelParam === "O_LEVEL" || levelParam === "A_LEVEL") where.level = levelParam;
 
     const rows = await prisma.assessmentDefinition.findMany({
-      where: activeOnly ? { isActive: true } : {},
-      orderBy: [{ createdAt: "asc" }],
+      where,
+      orderBy: [{ level: "asc" }, { createdAt: "asc" }],
       select: {
         id: true,
         level: true,
@@ -65,18 +98,22 @@ export async function GET(req: Request) {
       },
     });
 
-    // Return shape expected by your UI/store AssessmentDef
     const out = rows
       .map((r) => {
         const parsed = splitName(r.name);
         return {
           id: r.id,
+          level: r.level,
+          type: r.type,
           code: parsed.code,
           name: parsed.name,
           isActive: r.isActive,
         };
       })
-      .sort((a, b) => (a.code > b.code ? 1 : -1));
+      .sort((a, b) => {
+        if (a.level !== b.level) return String(a.level).localeCompare(String(b.level));
+        return a.code.localeCompare(b.code);
+      });
 
     return NextResponse.json(out);
   } catch (e: any) {
@@ -90,47 +127,34 @@ export async function POST(req: Request) {
     await requireUser();
     const body = await req.json();
 
-    // special action: reset defaults
     if (String(body?.action || "") === "resetDefaults") {
-      const defaults = [
+      const oDefaults = [
         { code: "CA1", name: "Continuous Assessment 1" },
         { code: "CA2", name: "Continuous Assessment 2" },
         { code: "MID", name: "Midterm" },
         { code: "EOT", name: "End of Term" },
       ];
 
-      for (const d of defaults) {
-        const full = combineName(d.code, d.name);
-        const type = inferTypeFromCode(d.code);
+      const aDefaults = [
+        { code: "MID", name: "Midterm" },
+        { code: "EOT", name: "End of Term" },
+      ];
 
-        // keep it simple: store as O_LEVEL (works for both in your current UI)
-        const def = await prisma.assessmentDefinition.upsert({
-          where: {
-            level_type_name: {
-              level: "O_LEVEL" as any,
-              type: type as any,
-              name: full,
-            },
-          },
-          update: { isActive: true },
-          create: {
-            level: "O_LEVEL" as any,
-            type: type as any,
-            name: full,
-            isActive: true,
-          },
-          select: { id: true },
-        });
+      for (const d of oDefaults) {
+        await upsertDefaultAssessment("O_LEVEL", d.code, d.name);
+      }
 
-        await ensureDefaultComponent(def.id);
+      for (const d of aDefaults) {
+        await upsertDefaultAssessment("A_LEVEL", d.code, d.name);
       }
 
       return NextResponse.json({ ok: true });
     }
 
-    // normal create
     const codeStr = String(body?.code || "").trim().toUpperCase();
     const nameStr = String(body?.name || "").trim();
+    const level = normalizeLevel(body?.level);
+
     if (!codeStr || !nameStr) {
       return NextResponse.json({ error: "Missing name or code" }, { status: 400 });
     }
@@ -140,7 +164,7 @@ export async function POST(req: Request) {
 
     const created = await prisma.assessmentDefinition.create({
       data: {
-        level: "O_LEVEL" as any,
+        level: level as any,
         type: type as any,
         name: full,
         isActive: true,
@@ -165,6 +189,8 @@ export async function PUT(req: Request) {
     const id = String(body?.id || "").trim();
     const codeStr = String(body?.code || "").trim().toUpperCase();
     const nameStr = String(body?.name || "").trim();
+    const level = normalizeLevel(body?.level);
+
     if (!id || !codeStr || !nameStr) {
       return NextResponse.json({ error: "Missing id/name/code" }, { status: 400 });
     }
@@ -174,7 +200,7 @@ export async function PUT(req: Request) {
 
     const updated = await prisma.assessmentDefinition.update({
       where: { id },
-      data: { name: full, type: type as any },
+      data: { name: full, type: type as any, level: level as any },
       select: { id: true },
     });
 

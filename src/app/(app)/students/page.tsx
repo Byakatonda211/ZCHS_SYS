@@ -20,6 +20,16 @@ type ApiStudent = {
   streamName?: string | null;
 };
 
+type StudentsResponse = {
+  items: ApiStudent[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  hasNextPage: boolean;
+  hasPrevPage: boolean;
+};
+
 type Me = { id: string; fullName: string; username: string; role: string };
 
 async function apiGet<T>(url: string): Promise<T> {
@@ -57,7 +67,13 @@ export default function StudentsPage() {
 
   const [role, setRole] = React.useState<string>("");
 
-  // live search debounce
+  const [page, setPage] = React.useState(1);
+  const pageSize = 25;
+  const [total, setTotal] = React.useState(0);
+  const [totalPages, setTotalPages] = React.useState(1);
+  const [hasNextPage, setHasNextPage] = React.useState(false);
+  const [hasPrevPage, setHasPrevPage] = React.useState(false);
+
   React.useEffect(() => {
     if (debounceRef.current) window.clearTimeout(debounceRef.current);
     debounceRef.current = window.setTimeout(() => setDebouncedQ(q), 250);
@@ -66,7 +82,6 @@ export default function StudentsPage() {
     };
   }, [q]);
 
-  // get real role (cookie session)
   React.useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -79,7 +94,6 @@ export default function StudentsPage() {
     };
   }, []);
 
-  // load filters
   React.useEffect(() => {
     (async () => {
       try {
@@ -107,6 +121,10 @@ export default function StudentsPage() {
     }
   }, [classFilter, streamFilter, visibleStreams]);
 
+  React.useEffect(() => {
+    setPage(1);
+  }, [debouncedQ, classFilter, streamFilter]);
+
   async function load() {
     setLoading(true);
     setError(null);
@@ -115,18 +133,24 @@ export default function StudentsPage() {
       if (debouncedQ.trim()) params.set("q", debouncedQ.trim());
       if (classFilter) params.set("classId", classFilter);
       if (streamFilter) params.set("streamId", streamFilter);
+      params.set("page", String(page));
+      params.set("pageSize", String(pageSize));
 
-      const url = params.toString() ? `/api/students?${params.toString()}` : "/api/students";
-      const data = await apiGet<any>(url);
+      const url = `/api/students?${params.toString()}`;
+      const data = await apiGet<StudentsResponse>(url);
 
-      const list: ApiStudent[] = Array.isArray(data)
-        ? data
-        : (data?.students || data?.data || data?.items || []);
-
-      setRows(list);
+      setRows(Array.isArray(data?.items) ? data.items : []);
+      setTotal(data?.total ?? 0);
+      setTotalPages(data?.totalPages ?? 1);
+      setHasNextPage(Boolean(data?.hasNextPage));
+      setHasPrevPage(Boolean(data?.hasPrevPage));
     } catch (e: any) {
       setError(e?.message || "Failed to load students");
       setRows([]);
+      setTotal(0);
+      setTotalPages(1);
+      setHasNextPage(false);
+      setHasPrevPage(false);
     } finally {
       setLoading(false);
     }
@@ -135,7 +159,7 @@ export default function StudentsPage() {
   React.useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedQ, classFilter, streamFilter]);
+  }, [debouncedQ, classFilter, streamFilter, page]);
 
   async function deleteStudent(id: string, name: string) {
     const ok = window.confirm(`Delete ${name}? This cannot be undone.`);
@@ -145,7 +169,12 @@ export default function StudentsPage() {
       const res = await fetch(`/api/students/${id}`, { method: "DELETE" });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || `Delete failed (${res.status})`);
-      await load();
+
+      if (rows.length === 1 && page > 1) {
+        setPage((p) => p - 1);
+      } else {
+        await load();
+      }
     } catch (e: any) {
       alert(e?.message || "Delete failed");
     }
@@ -182,15 +211,6 @@ export default function StudentsPage() {
     }
   }
 
-  // Alphabetical order A-Z based on firstName
-  const sortedRows = React.useMemo(() => {
-    const copy = [...rows];
-    copy.sort((a, b) =>
-      String(a.firstName || "").localeCompare(String(b.firstName || ""), undefined, { sensitivity: "base" })
-    );
-    return copy;
-  }, [rows]);
-
   const isAdmin = role === "ADMIN";
 
   return (
@@ -202,10 +222,8 @@ export default function StudentsPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Accessible to all roles */}
           <Button onClick={printClassListPdf}>Print</Button>
 
-          {/* Hide Add Student for non-admins */}
           {isAdmin ? (
             <Button onClick={() => router.push("/students/new")}>+ Add Student</Button>
           ) : null}
@@ -263,7 +281,7 @@ export default function StudentsPage() {
           </div>
 
           <div className="text-sm text-slate-600">
-            {loading ? "Loading..." : `${sortedRows.length} student(s)`}
+            {loading ? "Loading..." : `${total} student(s)`}
           </div>
         </div>
 
@@ -272,63 +290,91 @@ export default function StudentsPage() {
         {error ? (
           <div className="p-4 text-sm text-red-600">{error}</div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead className="bg-slate-50 text-slate-700">
-                <tr className="text-left">
-                  <th className="px-4 py-3 font-medium">ADMISSION NO</th>
-                  <th className="px-4 py-3 font-medium">NAME</th>
-                  <th className="px-4 py-3 font-medium">CLASS</th>
-                  <th className="px-4 py-3 font-medium">STREAM</th>
-                  <th className="px-4 py-3 font-medium text-right">ACTIONS</th>
-                </tr>
-              </thead>
+          <>
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-50 text-slate-700">
+                  <tr className="text-left">
+                    <th className="px-4 py-3 font-medium">ADMISSION NO</th>
+                    <th className="px-4 py-3 font-medium">NAME</th>
+                    <th className="px-4 py-3 font-medium">CLASS</th>
+                    <th className="px-4 py-3 font-medium">STREAM</th>
+                    <th className="px-4 py-3 font-medium text-right">ACTIONS</th>
+                  </tr>
+                </thead>
 
-              <tbody className="divide-y divide-slate-200">
-                {loading ? (
-                  <tr>
-                    <td className="px-4 py-4 text-slate-600" colSpan={5}>
-                      Loading students...
-                    </td>
-                  </tr>
-                ) : sortedRows.length === 0 ? (
-                  <tr>
-                    <td className="px-4 py-4 text-slate-600" colSpan={5}>
-                      No students found.
-                    </td>
-                  </tr>
-                ) : (
-                  sortedRows.map((s) => {
-                    const name = [s.firstName, s.otherNames, s.lastName].filter(Boolean).join(" ");
-                    return (
-                      <tr key={s.id} className="hover:bg-slate-50">
-                        <td className="px-4 py-3 text-slate-700">{s.admissionNo || "-"}</td>
-                        <td className="px-4 py-3 font-semibold text-slate-900">{name}</td>
-                        <td className="px-4 py-3 text-slate-700">{s.className || "-"}</td>
-                        <td className="px-4 py-3 text-slate-700">{s.streamName || "-"}</td>
-                        <td className="px-4 py-3">
-                          <div className="flex flex-wrap gap-2 justify-end">
-                            <Button variant="secondary" onClick={() => router.push(`/students/${s.id}`)}>
-                              View
-                            </Button>
-                            <Button variant="secondary" onClick={() => router.push(`/students/${s.id}/edit`)}>
-                              Edit
-                            </Button>
-                            <Button variant="secondary" onClick={() => router.push(`/students/${s.id}/move`)}>
-                              Move
-                            </Button>
-                            <Button variant="destructive" onClick={() => deleteStudent(s.id, name)}>
-                              Delete
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
+                <tbody className="divide-y divide-slate-200">
+                  {loading ? (
+                    <tr>
+                      <td className="px-4 py-4 text-slate-600" colSpan={5}>
+                        Loading students...
+                      </td>
+                    </tr>
+                  ) : rows.length === 0 ? (
+                    <tr>
+                      <td className="px-4 py-4 text-slate-600" colSpan={5}>
+                        No students found.
+                      </td>
+                    </tr>
+                  ) : (
+                    rows.map((s) => {
+                      const name = [s.firstName, s.otherNames, s.lastName].filter(Boolean).join(" ");
+                      return (
+                        <tr key={s.id} className="hover:bg-slate-50">
+                          <td className="px-4 py-3 text-slate-700">{s.admissionNo || "-"}</td>
+                          <td className="px-4 py-3 font-semibold text-slate-900">{name}</td>
+                          <td className="px-4 py-3 text-slate-700">{s.className || "-"}</td>
+                          <td className="px-4 py-3 text-slate-700">{s.streamName || "-"}</td>
+                          <td className="px-4 py-3">
+                            <div className="flex flex-wrap gap-2 justify-end">
+                              <Button variant="secondary" onClick={() => router.push(`/students/${s.id}`)}>
+                                View
+                              </Button>
+                              <Button variant="secondary" onClick={() => router.push(`/students/${s.id}/edit`)}>
+                                Edit
+                              </Button>
+                              <Button variant="secondary" onClick={() => router.push(`/students/${s.id}/move`)}>
+                                Move
+                              </Button>
+                              {isAdmin ? (
+                                <Button variant="destructive" onClick={() => deleteStudent(s.id, name)}>
+                                  Delete
+                                </Button>
+                              ) : null}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="border-t border-slate-200 px-4 py-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="text-sm text-slate-600">
+                Page {page} of {totalPages}
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={loading || !hasPrevPage}
+                >
+                  Previous
+                </Button>
+
+                <Button
+                  variant="secondary"
+                  onClick={() => setPage((p) => p + 1)}
+                  disabled={loading || !hasNextPage}
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          </>
         )}
       </Card>
     </div>

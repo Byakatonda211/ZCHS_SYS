@@ -2,10 +2,6 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 
-function isInt0to100(n: any) {
-  return Number.isInteger(n) && n >= 0 && n <= 100;
-}
-
 async function canEnterMarks(
   user: { id: string; role: string },
   classId: string,
@@ -19,13 +15,65 @@ async function canEnterMarks(
   });
 
   if (assignments.length === 0) return false;
-
-  // ✅ If the teacher is assigned as Class Teacher for this class,
-  // they can enter/edit marks for ANY subject in that class.
   if (assignments.some((a) => a.isClassTeacher)) return true;
 
-  // ✅ Otherwise, they can only enter/edit marks for subjects assigned to them in this class.
   return assignments.some((a) => a.subjectId === subjectId);
+}
+
+function round2(v: any) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  return Math.round(n * 100) / 100;
+}
+
+async function resolveEnterOutOf(classId: string, assessmentDefinitionId: string) {
+  try {
+    const cls = await prisma.class.findUnique({
+      where: { id: classId },
+      select: { level: true },
+    });
+
+    const def = await prisma.assessmentDefinition.findUnique({
+      where: { id: assessmentDefinitionId },
+      select: { type: true },
+    });
+
+    if (!cls || !def) return 100;
+
+    const reportType =
+      cls.level === "A_LEVEL"
+        ? def.type === "ENDTERM"
+          ? "A_EOT"
+          : "A_MID"
+        : def.type === "ENDTERM"
+        ? "O_EOT"
+        : "O_MID";
+
+    const p: any = prisma as any;
+    if (!p.reportSchemeComponent) return 100;
+
+    const component = await p.reportSchemeComponent.findFirst({
+      where: {
+        scheme: { reportType },
+        assessmentDefinitionId,
+      },
+      select: {
+        enterOutOf: true,
+      },
+    });
+
+    return round2(component?.enterOutOf) ?? 100;
+  } catch {
+    return 100;
+  }
+}
+
+function isValidMark(n: any, max: number) {
+  if (!Number.isFinite(n)) return false;
+  if (n < 0) return false;
+  if (n > max) return false;
+  const rounded = Math.round(n * 100) / 100;
+  return Math.abs(n - rounded) < 1e-9;
 }
 
 export async function POST(req: Request) {
@@ -49,8 +97,8 @@ export async function POST(req: Request) {
     const marks = Array.isArray(body?.marks)
       ? body.marks
       : Array.isArray(body?.entries)
-        ? body.entries
-        : [];
+      ? body.entries
+      : [];
 
     if (!academicYearId || !termId || !assessmentDefinitionId || !classId || !subjectId) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
@@ -69,6 +117,8 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Assessment component not found" }, { status: 400 });
     }
 
+    const enterOutOf = await resolveEnterOutOf(classId, assessmentDefinitionId);
+
     const rows = await prisma.$transaction(async (tx) => {
       const out: any[] = [];
 
@@ -77,14 +127,10 @@ export async function POST(req: Request) {
         const raw = m?.scoreRaw;
 
         if (!studentId) continue;
-
-        // Normalize scoreRaw to number|null (and validate 0..100 integers)
-        // Score is required by schema (Int). If blank/invalid, skip this mark row.
         if (raw === null || raw === "" || raw === undefined) continue;
 
-        const scoreRaw = Number(raw);
-        if (!isInt0to100(scoreRaw)) continue;
-
+        const scoreRaw = round2(raw);
+        if (scoreRaw === null || !isValidMark(scoreRaw, enterOutOf)) continue;
 
         const enrollment = await tx.enrollment.findFirst({
           where: {
@@ -98,8 +144,6 @@ export async function POST(req: Request) {
 
         if (!enrollment) continue;
 
-        // Prisma's WhereUniqueInput for a named composite unique can still require non-null fields.
-        // So: use upsert only when subjectPaperId is a string; otherwise do findFirst -> update/create.
         let row: any;
 
         if (subjectPaperId) {
@@ -122,13 +166,13 @@ export async function POST(req: Request) {
               academicYearId,
               termId,
               enrollmentId: enrollment.id,
-              studentId, // ✅ add this
+              studentId,
               componentId: component.id,
               subjectId,
               subjectPaperId,
               scoreRaw,
+              createdByUserId: user.id,
             },
-
           });
         } else {
           const existing = await tx.markEntry.findFirst({
@@ -157,14 +201,14 @@ export async function POST(req: Request) {
                 academicYearId,
                 termId,
                 enrollmentId: enrollment.id,
-                studentId, // ✅ add this
+                studentId,
                 componentId: component.id,
                 subjectId,
                 subjectPaperId: null,
                 scoreRaw,
+                createdByUserId: user.id,
               },
-           });
-
+            });
           }
         }
 
@@ -174,7 +218,14 @@ export async function POST(req: Request) {
       return out;
     });
 
-    return NextResponse.json({ ok: true, rows });
+    return NextResponse.json({
+      ok: true,
+      rows: rows.map((r: any) => ({
+        ...r,
+        scoreRaw: round2(r.scoreRaw),
+      })),
+      enterOutOf,
+    });
   } catch (e: any) {
     const msg = e?.message || "Error";
     const code = msg === "UNAUTHENTICATED" ? 401 : msg === "FORBIDDEN" ? 403 : 500;

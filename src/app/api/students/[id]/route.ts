@@ -54,12 +54,10 @@ export async function PATCH(req: Request, ctx: Ctx) {
 
     const body = await req.json().catch(() => ({}));
 
-    // NEW: residence section (optional)
     const residenceSectionRaw = String(body?.residenceSection ?? "").trim();
     const residenceSection =
       residenceSectionRaw === "DAY" || residenceSectionRaw === "BOARDING" ? residenceSectionRaw : null;
 
-    // NEW: enrolled subject ids (optional)
     const enrolledSubjectIdsRaw = Array.isArray(body?.enrolledSubjectIds) ? body.enrolledSubjectIds : null;
     const enrolledSubjectIds =
       enrolledSubjectIdsRaw != null
@@ -117,12 +115,10 @@ export async function PATCH(req: Request, ctx: Ctx) {
           recurrentMedication: body?.recurrentMedication ?? null,
           knownDisability: body?.knownDisability ?? null,
 
-          // NEW
           residenceSection,
         },
       });
 
-      // NEW: if enrolledSubjectIds provided, update active enrollment subjects (optional)
       if (enrolledSubjectIds !== null) {
         const activeEnrollment = await tx.enrollment.findFirst({
           where: { studentId: cleanId, isActive: true },
@@ -154,6 +150,54 @@ export async function PATCH(req: Request, ctx: Ctx) {
   } catch (e: any) {
     const msg = e?.message || "Error";
     const code = msg === "UNAUTHENTICATED" ? 401 : 500;
+    return NextResponse.json({ error: msg }, { status: code });
+  }
+}
+
+export async function DELETE(_req: Request, ctx: Ctx) {
+  try {
+    const user = await requireUser();
+
+    if (user.role !== "ADMIN") {
+      return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+    }
+
+    const { id } = await ctx.params;
+    const cleanId = String(id || "").trim();
+
+    if (!cleanId) {
+      return NextResponse.json({ error: "Missing id" }, { status: 400 });
+    }
+
+    const existing = await prisma.student.findUnique({
+      where: { id: cleanId },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+      },
+    });
+
+    if (!existing) {
+      return NextResponse.json({ error: "Student not found" }, { status: 404 });
+    }
+
+    await prisma.student.delete({
+      where: { id: cleanId },
+    });
+
+    return NextResponse.json({
+      ok: true,
+      message: "Student deleted successfully",
+      deletedStudent: {
+        id: existing.id,
+        name: `${existing.firstName} ${existing.lastName}`.trim(),
+      },
+    });
+  } catch (e: any) {
+    const msg = e?.message || "Error";
+    const code =
+      msg === "UNAUTHENTICATED" ? 401 : msg === "FORBIDDEN" ? 403 : 500;
     return NextResponse.json({ error: msg }, { status: code });
   }
 }
