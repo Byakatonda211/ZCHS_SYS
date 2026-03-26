@@ -229,7 +229,9 @@ export default function MarksPage() {
     (async () => {
       try {
         const [stuResp, subs] = await Promise.all([
-          apiGetJSON<StudentsResponse>(`/api/students?classId=${encodeURIComponent(classId)}&page=1&pageSize=100`),
+          apiGetJSON<StudentsResponse>(
+            `/api/students?classId=${encodeURIComponent(classId)}&page=1&pageSize=100`
+          ),
           apiGetJSON<Subject[]>(`/api/subjects?classId=${encodeURIComponent(classId)}`),
         ]);
 
@@ -240,15 +242,15 @@ export default function MarksPage() {
         setStudents(stu || []);
         setSubjects(subs || []);
 
-        const papersResults = await Promise.all(
-          (subs || []).map(async (s) => {
+        const papersResults: Array<[string, SubjectPaper[]]> = await Promise.all(
+          (subs || []).map(async (s): Promise<[string, SubjectPaper[]]> => {
             try {
               const papers = await apiGetJSON<SubjectPaper[]>(
                 `/api/subjects/${encodeURIComponent(s.id)}/papers`
               );
-              return [s.id, papers || []] as const;
+              return [s.id, papers ?? []];
             } catch {
-              return [s.id, []] as const;
+              return [s.id, []];
             }
           })
         );
@@ -264,7 +266,7 @@ export default function MarksPage() {
         const firstSub = (subs || [])[0]?.id ?? "";
         setSubjectId(firstSub);
 
-        const firstPaper = firstSub ? (map[firstSub]?.[0]?.id ?? "") : "";
+        const firstPaper = firstSub ? map[firstSub]?.[0]?.id ?? "" : "";
         setPaperId(firstPaper);
 
         setDrafts({});
@@ -287,7 +289,7 @@ export default function MarksPage() {
 
   React.useEffect(() => {
     if (!aLevel) return;
-    const first = subjectId ? (papersBySubject[subjectId]?.[0]?.id ?? "") : "";
+    const first = subjectId ? papersBySubject[subjectId]?.[0]?.id ?? "" : "";
     setPaperId(first);
   }, [aLevel, subjectId, papersBySubject]);
 
@@ -342,7 +344,9 @@ export default function MarksPage() {
 
         if (cancelled) return;
 
-        const schemeComponent = scheme?.components?.find((c) => c.assessmentId === selectedAssessment.id);
+        const schemeComponent = scheme?.components?.find(
+          (c) => c.assessmentId === selectedAssessment.id
+        );
         setEnterOutOf(Number(schemeComponent?.enterOutOf ?? 100));
       } catch {
         if (cancelled) return;
@@ -397,7 +401,9 @@ export default function MarksPage() {
     if (!assessmentId || !subjectId) return 0;
     const paper = aLevel ? paperId : "";
     const suffix = `|${assessmentId}|${subjectId}|${paper ?? ""}`;
-    return Object.keys(drafts).filter((k) => k.endsWith(suffix) && drafts[k].trim() !== "").length;
+    return Object.keys(drafts).filter(
+      (k) => k.endsWith(suffix) && drafts[k].trim() !== ""
+    ).length;
   }, [drafts, assessmentId, subjectId, paperId, aLevel]);
 
   React.useEffect(() => {
@@ -500,7 +506,10 @@ export default function MarksPage() {
   return (
     <div className="space-y-4">
       <Card>
-        <CardHeader title="Enter Marks" subtitle="Select class, term, assessment and subject, then enter marks" />
+        <CardHeader
+          title="Enter Marks"
+          subtitle="Select class, term, assessment and subject, then enter marks"
+        />
         <div className="p-4 grid grid-cols-1 md:grid-cols-6 gap-3">
           <div className="space-y-1 md:col-span-2">
             <Label>Class</Label>
@@ -539,7 +548,7 @@ export default function MarksPage() {
               onChange={(e: any) => {
                 const newSub = e.target.value;
                 setSubjectId(newSub);
-                const firstPaper = newSub ? (papersBySubject[newSub]?.[0]?.id ?? "") : "";
+                const firstPaper = newSub ? papersBySubject[newSub]?.[0]?.id ?? "" : "";
                 setPaperId(firstPaper);
               }}
               options={subjects.map((s: any) => ({ value: s.id, label: s.name }))}
@@ -584,8 +593,12 @@ export default function MarksPage() {
           subtitle={
             <div className="flex items-center gap-2">
               <Badge>{filteredStudents.length} students</Badge>
-              {draftCountForCurrentSelection > 0 ? <Badge>{draftCountForCurrentSelection} entered</Badge> : null}
-              <Badge>{selectedLevel === "A_LEVEL" ? "A-Level assessments" : "O-Level assessments"}</Badge>
+              {draftCountForCurrentSelection > 0 ? (
+                <Badge>{draftCountForCurrentSelection} entered</Badge>
+              ) : null}
+              <Badge>
+                {selectedLevel === "A_LEVEL" ? "A-Level assessments" : "O-Level assessments"}
+              </Badge>
             </div>
           }
         />
@@ -605,7 +618,9 @@ export default function MarksPage() {
               <div key={s.id} className="flex items-center gap-3 border rounded p-2">
                 <div className="flex-1">
                   <div className="font-semibold text-slate-900">
-                    {s.admissionNo ? <span className="hidden md:inline">{s.admissionNo} — </span> : null}
+                    {s.admissionNo ? (
+                      <span className="hidden md:inline">{s.admissionNo} — </span>
+                    ) : null}
                     {s.firstName} {s.lastName} {s.otherNames ?? ""}
                   </div>
                 </div>
@@ -624,7 +639,9 @@ export default function MarksPage() {
                     }}
                     placeholder={`0-${formatDecimalInput(enterOutOf)}`}
                   />
-                  {errors[k] ? <div className="text-xs text-red-600 mt-1">{errors[k]}</div> : null}
+                  {errors[k] ? (
+                    <div className="text-xs text-red-600 mt-1">{errors[k]}</div>
+                  ) : null}
                 </div>
               </div>
             );
@@ -632,7 +649,10 @@ export default function MarksPage() {
         </div>
 
         <div className="p-4 pt-0 flex justify-end">
-          <Button onClick={saveAll} disabled={saving || draftCountForCurrentSelection === 0 || !assessmentId}>
+          <Button
+            onClick={saveAll}
+            disabled={saving || draftCountForCurrentSelection === 0 || !assessmentId}
+          >
             {saving ? "Saving..." : "Save All"}
           </Button>
         </div>
