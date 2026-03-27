@@ -63,15 +63,28 @@ type EnrollmentSubjectLike = {
   name?: string;
 };
 
+type NormalizedEnrollmentSubject = {
+  id: string;
+  name: string;
+};
+
 function roundOrNull(value: number | null) {
   return value === null ? null : Math.round(value);
 }
 
-function getEnrolledSubjectsFromEnrollment(enrollment: any) {
-  const rawSubjects = Array.isArray(enrollment?.subjects) ? enrollment.subjects : [];
+function isNormalizedEnrollmentSubject(
+  item: NormalizedEnrollmentSubject | null
+): item is NormalizedEnrollmentSubject {
+  return item !== null;
+}
 
-  const normalized = rawSubjects
-    .map((item: EnrollmentSubjectLike) => {
+function getEnrolledSubjectsFromEnrollment(enrollment: any) {
+  const rawSubjects: EnrollmentSubjectLike[] = Array.isArray(enrollment?.subjects)
+    ? enrollment.subjects
+    : [];
+
+  const normalized: NormalizedEnrollmentSubject[] = rawSubjects
+    .map((item: EnrollmentSubjectLike): NormalizedEnrollmentSubject | null => {
       const subjectId = String(
         item?.subjectId || item?.subject?.id || item?.id || ""
       ).trim();
@@ -87,9 +100,9 @@ function getEnrolledSubjectsFromEnrollment(enrollment: any) {
         name: subjectName || "Unnamed Subject",
       };
     })
-    .filter((item): item is { id: string; name: string } => Boolean(item));
+    .filter(isNormalizedEnrollmentSubject);
 
-  const deduped = new Map<string, { id: string; name: string }>();
+  const deduped = new Map<string, NormalizedEnrollmentSubject>();
   for (const subject of normalized) {
     if (!deduped.has(subject.id)) {
       deduped.set(subject.id, subject);
