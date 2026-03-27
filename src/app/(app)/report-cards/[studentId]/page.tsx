@@ -395,8 +395,10 @@ export default function StudentReportCardPage() {
         if (!loadedStudent) throw new Error("Student not found.");
 
         const loadedActiveEnrollment =
-          loadedStudent.enrollments?.find((e) => e?.isActive) ?? null;
+           loadedStudent.enrollments?.find((e) => e?.isActive) ?? null;
         if (!loadedActiveEnrollment) throw new Error("Student has no active enrollment.");
+
+        const activeEnrollmentData = loadedActiveEnrollment;
 
         const enrolledSubjectsMap = new Map<string, { subjectId: string; subjectName: string }>();
         for (const s of loadedActiveEnrollment.subjects || []) {
@@ -458,10 +460,10 @@ export default function StudentReportCardPage() {
         );
 
         const metaParams = new URLSearchParams({
-          classId: loadedActiveEnrollment.classId,
+          classId: activeEnrollmentData.classId,
         });
-        if (loadedActiveEnrollment.streamId) {
-          metaParams.set("streamId", loadedActiveEnrollment.streamId);
+        if (activeEnrollmentData.streamId) {
+            metaParams.set("streamId", activeEnrollmentData.streamId);
         }
 
         const metaRes = await fetch(`/api/report-card-meta?${metaParams.toString()}`, {
@@ -486,7 +488,7 @@ export default function StudentReportCardPage() {
             academicYearId: yearId,
             termId,
             assessmentDefinitionId: component.assessmentId,
-            classId: loadedActiveEnrollment.classId,
+            classId: activeEnrollmentData.classId,
             subjectId,
           });
 
@@ -662,7 +664,7 @@ export default function StudentReportCardPage() {
         if (cancelled) return;
 
         setStudent(loadedStudent);
-        setActiveEnrollment(loadedActiveEnrollment);
+        setActiveEnrollment(activeEnrollmentData);
         setScheme(loadedScheme);
         setGradeDescriptors(loadedScheme.gradeDescriptors || DEFAULT_O_LEVEL_DESCRIPTORS);
         setRows(subjectRows);
