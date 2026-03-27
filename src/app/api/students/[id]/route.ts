@@ -23,7 +23,16 @@ export async function GET(_req: Request, ctx: Ctx) {
           include: {
             class: true,
             stream: true,
-            subjects: { include: { subject: true } },
+            subjects: {
+                where: {
+                  subject: {
+                    isActive: true,
+                       },
+                     },
+               include: {
+                 subject: true,
+                    },
+             },
           },
         },
       },

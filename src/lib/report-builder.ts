@@ -53,8 +53,50 @@ export type StudentReportCardData = {
   };
 };
 
+type EnrollmentSubjectLike = {
+  subjectId?: string;
+  id?: string;
+  subject?: {
+    id?: string;
+    name?: string;
+  } | null;
+  name?: string;
+};
+
 function roundOrNull(value: number | null) {
   return value === null ? null : Math.round(value);
+}
+
+function getEnrolledSubjectsFromEnrollment(enrollment: any) {
+  const rawSubjects = Array.isArray(enrollment?.subjects) ? enrollment.subjects : [];
+
+  const normalized = rawSubjects
+    .map((item: EnrollmentSubjectLike) => {
+      const subjectId = String(
+        item?.subjectId || item?.subject?.id || item?.id || ""
+      ).trim();
+
+      const subjectName = String(
+        item?.subject?.name || item?.name || ""
+      ).trim();
+
+      if (!subjectId) return null;
+
+      return {
+        id: subjectId,
+        name: subjectName || "Unnamed Subject",
+      };
+    })
+    .filter((item): item is { id: string; name: string } => Boolean(item));
+
+  const deduped = new Map<string, { id: string; name: string }>();
+  for (const subject of normalized) {
+    if (!deduped.has(subject.id)) {
+      deduped.set(subject.id, subject);
+    }
+  }
+
+  return Array.from(deduped.values());
 }
 
 export function buildStudentReportCard(params: {
@@ -73,6 +115,7 @@ export function buildStudentReportCard(params: {
 
   const streamName =
     (enrollment as any)?.streamName ??
+    (enrollment as any)?.stream?.name ??
     (enrollment as any)?.stream ??
     (enrollment as any)?.streamLabel ??
     undefined;
@@ -80,7 +123,10 @@ export function buildStudentReportCard(params: {
   const className =
     getClasses().find((c) => c.id === classId)?.name ?? student.className ?? "";
 
-  const subjects = getSubjectsForClass(classId);
+  const enrolledSubjects = getEnrolledSubjectsFromEnrollment(enrollment);
+
+  const subjects =
+    enrolledSubjects.length > 0 ? enrolledSubjects : getSubjectsForClass(classId);
 
   const subjectRows: ReportSubjectRow[] = subjects.map((subject) => {
     const teacherAssignment = getSubjectTeacherAssignment({
