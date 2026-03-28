@@ -14,16 +14,6 @@ const SCHOOL_CONTACT = "Tel: 0773 748 168 / 0704 590 234";
 
 /**
  * Image sources for PDF generation only.
- *
- * Best deployment option:
- * - Put the files in /public/report-assets/
- * - Then they will be available at:
- *   /report-assets/badge.png
- *   /report-assets/headteacher-signature.jpg
- *
- * You may also use env vars if you prefer CDN / object storage / GitHub raw URLs:
- * - NEXT_PUBLIC_REPORT_BADGE_URL
- * - NEXT_PUBLIC_HEADTEACHER_SIGNATURE_URL
  */
 const REPORT_BADGE_URL =
   process.env.NEXT_PUBLIC_REPORT_BADGE_URL || "/report-assets/badge.png";
@@ -138,6 +128,7 @@ type LoadedPdfImage = {
   format: "PNG" | "JPEG";
   width: number;
   height: number;
+  alias?: string;
 };
 
 const DEFAULT_O_LEVEL_DESCRIPTORS: GradeDescriptorRow[] = [
@@ -356,35 +347,78 @@ async function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
-async function loadPdfImage(url: string): Promise<LoadedPdfImage | null> {
+async function blobToCompressedJpegData(
+  blob: Blob,
+  quality = 0.72
+): Promise<{ dataUrl: string; width: number; height: number }> {
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new window.Image();
+      el.onload = () => resolve(el);
+      el.onerror = reject;
+      el.src = objectUrl;
+    });
+
+    const canvas = document.createElement("canvas");
+    canvas.width = img.width || 1;
+    canvas.height = img.height || 1;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas context unavailable");
+
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+    const dataUrl = canvas.toDataURL("image/jpeg", quality);
+    return {
+      dataUrl,
+      width: canvas.width,
+      height: canvas.height,
+    };
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+async function loadPdfImage(url: string, alias: string): Promise<LoadedPdfImage | null> {
   try {
     const absoluteUrl =
       typeof window !== "undefined" && url.startsWith("/")
         ? `${window.location.origin}${url}`
         : url;
 
-    const res = await fetch(absoluteUrl, { cache: "no-store" });
+    const res = await fetch(absoluteUrl, { cache: "force-cache" });
     if (!res.ok) return null;
 
     const blob = await res.blob();
-    const mime = blob.type || "";
-    const format: "PNG" | "JPEG" =
-      mime.toLowerCase().includes("png") ? "PNG" : "JPEG";
 
-    const dataUrl = await blobToDataUrl(blob);
+    if (alias === "badge") {
+      const dataUrl = await blobToDataUrl(blob);
+      const size = await new Promise<{ width: number; height: number }>((resolve, reject) => {
+        const img = new window.Image();
+        img.onload = () => resolve({ width: img.width || 1, height: img.height || 1 });
+        img.onerror = reject;
+        img.src = dataUrl;
+      });
 
-    const dimensions = await new Promise<{ width: number; height: number }>((resolve, reject) => {
-      const img = new window.Image();
-      img.onload = () => resolve({ width: img.width || 1, height: img.height || 1 });
-      img.onerror = reject;
-      img.src = dataUrl;
-    });
+      return {
+        dataUrl,
+        format: "PNG",
+        width: size.width,
+        height: size.height,
+        alias,
+      };
+    }
+
+    const compressed = await blobToCompressedJpegData(blob, 0.72);
 
     return {
-      dataUrl,
-      format,
-      width: dimensions.width,
-      height: dimensions.height,
+      dataUrl: compressed.dataUrl,
+      format: "JPEG",
+      width: compressed.width,
+      height: compressed.height,
+      alias,
     };
   } catch {
     return null;
@@ -806,11 +840,19 @@ export default function StudentReportCardPage() {
       setDownloading(true);
 
       const [badgeImage, signatureImage] = await Promise.all([
-        loadPdfImage(REPORT_BADGE_URL),
-        loadPdfImage(HEADTEACHER_SIGNATURE_URL),
+        loadPdfImage(REPORT_BADGE_URL, "badge"),
+        loadPdfImage(HEADTEACHER_SIGNATURE_URL, "signature"),
       ]);
 
-      const pdf = new jsPDF("p", "mm", "a4");
+      const pdf = new jsPDF({
+        orientation: "p",
+        unit: "mm",
+        format: "a4",
+        compress: true,
+        putOnlyUsedFonts: true,
+        precision: 2,
+      });
+
       const left = 6.2;
       const usableWidth = 197.6;
       const pageBottom = 287;
@@ -824,10 +866,12 @@ export default function StudentReportCardPage() {
           : 0);
 
       const density: "normal" | "compact" | "tight" =
-        visualLoad >= 15 ? "tight" : visualLoad >= 13 ? "compact" : "normal";
+        visualLoad >= 18 ? "tight" : visualLoad >= 15 ? "compact" : "normal";
 
       const compactPdf = density !== "normal";
       const tightPdf = density === "tight";
+
+      const loosenFactor = tightPdf ? 0 : compactPdf ? 0.04 : 0.12;
 
       const COLORS = {
         border: [203, 213, 225] as [number, number, number],
@@ -964,7 +1008,16 @@ export default function StudentReportCardPage() {
         const dx = x + (maxW - drawW) / 2;
         const dy = yy + (maxH - drawH) / 2;
 
-        pdf.addImage(image.dataUrl, image.format, dx, dy, drawW, drawH);
+        pdf.addImage(
+          image.dataUrl,
+          image.format,
+          dx,
+          dy,
+          drawW,
+          drawH,
+          image.alias,
+          "MEDIUM"
+        );
       };
 
       const ensurePageSpace = (requiredHeight: number) => {
@@ -973,27 +1026,27 @@ export default function StudentReportCardPage() {
         y = 8;
       };
 
-      const headerH = tightPdf ? 24 : compactPdf ? 26.5 : 31;
+      const headerH = tightPdf ? 24.8 : compactPdf ? 27.4 : 31.8;
       const headerBandH = tightPdf ? 5.0 : compactPdf ? 5.5 : 6.5;
 
       const outerPad = tightPdf ? 1.4 : 1.6;
       const badgeSlotW = badgeImage ? (tightPdf ? 38 : compactPdf ? 41 : 45) : 0;
       const badgeBoxW = badgeImage ? badgeSlotW - 1.0 : 0;
-      const badgeBoxH = badgeImage ? headerH - 2.2 : 0;
-      const badgeGap = badgeImage ? 2.4 : 0;
+      const badgeBoxH = badgeImage ? headerH - 3.2 : 0;
+      const badgeGap = badgeImage ? 2.8 : 0;
 
       drawBox(left, y, usableWidth, headerH, [255, 255, 255], 2.2);
 
       if (badgeImage) {
         const badgeBoxX = left + outerPad;
-        const badgeBoxY = y + 2.1;
+        const badgeBoxY = y + 1.2;
         drawBox(badgeBoxX, badgeBoxY, badgeBoxW, badgeBoxH, [248, 250, 252], 1.8);
         drawImageFit(
           badgeImage,
-          badgeBoxX + 0.1,
-          badgeBoxY + 0.1,
-          badgeBoxW - 0.2,
-          badgeBoxH - 0.2
+          badgeBoxX + 0.3,
+          badgeBoxY + 0.3,
+          badgeBoxW - 0.6,
+          badgeBoxH - 0.6
         );
       }
 
@@ -1001,19 +1054,19 @@ export default function StudentReportCardPage() {
       const contentWidth = usableWidth - (badgeImage ? badgeSlotW + badgeGap : 0);
       const contentCenterX = contentLeft + contentWidth / 2;
 
-      drawText(SCHOOL_NAME, contentCenterX, y + (tightPdf ? 6.1 : compactPdf ? 6.8 : 7.6), {
+      drawText(SCHOOL_NAME, contentCenterX, y + (tightPdf ? 6.1 : compactPdf ? 6.9 : 7.8), {
         size: tightPdf ? 14 : compactPdf ? 15.2 : 16.8,
         style: "bold",
         align: "center",
       });
-      drawText(SCHOOL_MOTTO, contentCenterX, y + (tightPdf ? 9.8 : compactPdf ? 10.8 : 12.4), {
+      drawText(SCHOOL_MOTTO, contentCenterX, y + (tightPdf ? 9.9 : compactPdf ? 10.9 : 12.5), {
         size: tightPdf ? 7.6 : compactPdf ? 8.2 : 9.0,
         align: "center",
       });
       drawText(
         `${SCHOOL_ADDRESS} • ${SCHOOL_CONTACT}`,
         contentCenterX,
-        y + (tightPdf ? 13.0 : compactPdf ? 14.3 : 16.9),
+        y + (tightPdf ? 13.2 : compactPdf ? 14.5 : 17.1),
         {
           size: tightPdf ? 6.7 : compactPdf ? 7.2 : 8.0,
           align: "center",
@@ -1024,7 +1077,7 @@ export default function StudentReportCardPage() {
       const bandW = contentWidth - (tightPdf ? 14 : compactPdf ? 16 : 20);
       drawBox(
         bandX,
-        y + headerH - headerBandH - 1.3,
+        y + headerH - headerBandH - 1.5,
         bandW,
         headerBandH,
         COLORS.primaryDark,
@@ -1033,7 +1086,7 @@ export default function StudentReportCardPage() {
       drawText(
         reportHeading,
         contentCenterX,
-        y + headerH - (tightPdf ? 2.0 : compactPdf ? 2.2 : 2.4),
+        y + headerH - (tightPdf ? 2.1 : compactPdf ? 2.25 : 2.45),
         {
           size: tightPdf ? 7.2 : compactPdf ? 7.9 : 8.9,
           style: "bold",
@@ -1042,10 +1095,10 @@ export default function StudentReportCardPage() {
         }
       );
 
-      y += headerH + (tightPdf ? 1.6 : compactPdf ? 2.0 : 2.3);
+      y += headerH + (tightPdf ? 1.8 : compactPdf ? 2.2 : 2.5);
 
       const infoGap = 2;
-      const infoH = tightPdf ? 7.0 : compactPdf ? 7.8 : 8.8;
+      const infoH = tightPdf ? 7.4 : compactPdf ? 8.0 : 8.8;
       const nameW = tightPdf ? 95 : compactPdf ? 98 : 100;
       const numberW = tightPdf ? 51 : compactPdf ? 53 : 55;
       const classW = usableWidth - nameW - numberW - infoGap * 2;
@@ -1087,22 +1140,16 @@ export default function StudentReportCardPage() {
         className
       );
 
-      y += tightPdf ? 8.5 : compactPdf ? 9.6 : 10.8;
+      y += tightPdf ? 8.8 : compactPdf ? 9.8 : 11.2;
 
-      drawBox(
-        left,
-        y,
-        usableWidth,
-        tightPdf ? 5.2 : compactPdf ? 5.6 : 6.8,
-        COLORS.secondaryDark,
-        1.4
-      );
-      drawText("SUMMARY RESULTS", left + 2, y + (tightPdf ? 3.7 : compactPdf ? 4.0 : 4.8), {
+      const summaryBandH = tightPdf ? 5.4 : compactPdf ? 5.8 : 6.9;
+      drawBox(left, y, usableWidth, summaryBandH, COLORS.secondaryDark, 1.4);
+      drawText("SUMMARY RESULTS", left + 2, y + (tightPdf ? 3.85 : compactPdf ? 4.15 : 4.95), {
         size: tightPdf ? 7.2 : compactPdf ? 7.7 : 8.7,
         style: "bold",
         color: [255, 255, 255],
       });
-      y += tightPdf ? 5.5 : compactPdf ? 6.0 : 7.4;
+      y += tightPdf ? 5.7 : compactPdf ? 6.2 : 7.6;
 
       const isSummaryWithPoints = isALevelReport;
 
@@ -1112,8 +1159,8 @@ export default function StudentReportCardPage() {
       const s4 = isSummaryWithPoints ? 51.8 : 56.3;
       const s5 = isSummaryWithPoints ? 51.8 : 56.3;
 
-      const summaryHeadH = tightPdf ? 5.9 : compactPdf ? 6.3 : 7.6;
-      const summaryRowH = tightPdf ? 5.9 : compactPdf ? 6.3 : 7.6;
+      const summaryHeadH = tightPdf ? 6.2 : compactPdf ? 6.8 : 7.9;
+      const summaryRowH = tightPdf ? 6.4 : compactPdf ? 7.0 : 8.4;
 
       drawCell("Overall Average", left, y, s1, summaryHeadH, {
         bold: true,
@@ -1215,41 +1262,35 @@ export default function StudentReportCardPage() {
         }
       );
 
-      y += tightPdf ? 6.5 : compactPdf ? 7.2 : 9.2;
+      y += tightPdf ? 7.1 : compactPdf ? 7.9 : 10.0;
 
-      drawBox(
-        left,
-        y,
-        usableWidth,
-        tightPdf ? 5.2 : compactPdf ? 5.6 : 6.8,
-        COLORS.primaryDark,
-        1.4
-      );
+      const subjectBandH = tightPdf ? 5.4 : compactPdf ? 5.8 : 6.9;
+      drawBox(left, y, usableWidth, subjectBandH, COLORS.primaryDark, 1.4);
       drawText(
         "SUBJECT ACHIEVEMENT LEVEL",
         left + 2,
-        y + (tightPdf ? 3.7 : compactPdf ? 4.0 : 4.8),
+        y + (tightPdf ? 3.85 : compactPdf ? 4.15 : 4.95),
         {
           size: tightPdf ? 7.2 : compactPdf ? 7.7 : 8.7,
           style: "bold",
           color: [255, 255, 255],
         }
       );
-      y += tightPdf ? 5.5 : compactPdf ? 6.0 : 7.4;
+      y += tightPdf ? 5.7 : compactPdf ? 6.2 : 7.6;
 
       const componentCount = scheme.components.length;
 
       let subjectW = hasPapers
         ? tightPdf
-          ? 22
-          : compactPdf
           ? 23
-          : 27
+          : compactPdf
+          ? 24
+          : 29
         : tightPdf
-        ? 30
+        ? 33
         : compactPdf
-        ? 31
-        : 36;
+        ? 35
+        : 41;
 
       let paperW = hasPapers ? (tightPdf ? 14 : compactPdf ? 15 : 18) : 0;
 
@@ -1267,31 +1308,36 @@ export default function StudentReportCardPage() {
             ? 13
             : 15
           : tightPdf
-          ? 9.5
+          ? 9.8
           : compactPdf
-          ? 10
-          : 12
+          ? 10.6
+          : 12.2
         : componentCount <= 2
         ? tightPdf
-          ? 14
+          ? 14.5
           : compactPdf
-          ? 15
-          : 17
+          ? 15.5
+          : 17.5
         : componentCount === 3
         ? tightPdf
-          ? 12
+          ? 12.2
           : compactPdf
-          ? 13
-          : 15
+          ? 13.2
+          : 15.2
         : tightPdf
-        ? 10
+        ? 10.4
         : compactPdf
-        ? 11
-        : 13;
+        ? 11.2
+        : 13.0;
 
-      let totalW = tightPdf ? 10.2 : compactPdf ? 10.8 : 13;
-      let gradeW = tightPdf ? 9.0 : compactPdf ? 9.8 : 12;
-      let initialsW = tightPdf ? 8.3 : compactPdf ? 8.8 : 11;
+      let totalW = tightPdf ? 10.4 : compactPdf ? 11.2 : 13.6;
+      let gradeW = tightPdf ? 9.2 : compactPdf ? 10.0 : 12.4;
+      let initialsW = tightPdf ? 8.5 : compactPdf ? 9.2 : 11.0;
+
+      const widthSlack = Math.min(5.5, 2.5 + visualLoad * 0.12) * loosenFactor;
+      subjectW += widthSlack * 1.6;
+      totalW += widthSlack * 0.25;
+      gradeW += widthSlack * 0.2;
 
       let commentW =
         usableWidth -
@@ -1302,11 +1348,17 @@ export default function StudentReportCardPage() {
           gradeW +
           initialsW);
 
-      const minCommentW = tightPdf ? 34 : compactPdf ? 36 : 42;
+      const minCommentW = tightPdf ? 35 : compactPdf ? 38 : 47;
       if (commentW < minCommentW) {
         const needed = minCommentW - commentW;
         commentW += needed;
-        subjectW -= Math.min(needed, 2);
+        subjectW -= Math.min(needed, 3);
+      } else if (!tightPdf) {
+        const subjectBoost = Math.min(4, commentW - minCommentW) * 0.35;
+        const commentBoost = Math.min(6, commentW - minCommentW) * 0.4;
+        subjectW += subjectBoost;
+        commentW -= subjectBoost;
+        commentW += commentBoost;
       }
 
       const tableWidth =
@@ -1321,7 +1373,7 @@ export default function StudentReportCardPage() {
       const tableLeft = left + (usableWidth - tableWidth) / 2;
 
       let x = tableLeft;
-      const subjectHeadH = tightPdf ? 6.1 : compactPdf ? 6.6 : 8.2;
+      const subjectHeadH = tightPdf ? 6.4 : compactPdf ? 7.0 : 8.6;
 
       drawCell("Subject", x, y, subjectW, subjectHeadH, {
         bold: true,
@@ -1406,11 +1458,25 @@ export default function StudentReportCardPage() {
 
       y += subjectHeadH;
 
+      const estimatedContentBottom =
+        y +
+        rows.length * (tightPdf ? 5.2 : compactPdf ? 5.8 : 7.2) +
+        42;
+
+      const freeVerticalSpace = Math.max(0, pageBottom - estimatedContentBottom);
+      const verticalStretch =
+        tightPdf
+          ? 1
+          : compactPdf
+          ? Math.min(1.07, 1 + freeVerticalSpace / 260)
+          : Math.min(1.18, 1 + freeVerticalSpace / 180);
+
       for (const row of rows) {
         const paperRows = row.papers || [];
 
         if (hasPapers && paperRows.length > 0) {
-          const singlePaperHeight = tightPdf ? 5.1 : compactPdf ? 5.6 : 7.2;
+          const singlePaperHeightBase = tightPdf ? 5.1 : compactPdf ? 5.8 : 7.5;
+          const singlePaperHeight = singlePaperHeightBase * verticalStretch;
           const groupHeight = singlePaperHeight * paperRows.length;
           const subjectHeightNeeded = Math.max(
             groupHeight,
@@ -1513,8 +1579,9 @@ export default function StudentReportCardPage() {
           tightPdf ? 5.0 : compactPdf ? 5.4 : 6.4,
           tightPdf ? 2.5 : 2.8
         );
+        const rowHeightBase = tightPdf ? 5.3 : compactPdf ? 6.1 : 8.1;
         const rowHeight = Math.max(
-          tightPdf ? 5.2 : compactPdf ? 5.8 : 7.6,
+          rowHeightBase * verticalStretch,
           subjectTextHeight,
           commentTextHeight
         );
@@ -1582,20 +1649,19 @@ export default function StudentReportCardPage() {
         y += rowHeight;
       }
 
-      y += tightPdf ? 1.8 : compactPdf ? 2.2 : 3.4;
+      y += tightPdf ? 1.8 : compactPdf ? 2.4 : 3.8;
 
       const headCommentText = headTeacherComment || "—";
       const remainingHeight = Math.max(pageBottom - y, 28);
 
       const base = {
-        blockTitleH: tightPdf ? 4.8 : compactPdf ? 5.2 : 6.2,
-        gapAfterTitle: tightPdf ? 0.2 : compactPdf ? 0.25 : 0.3,
-        gdHeaderH: tightPdf ? 4.8 : compactPdf ? 5.2 : 6.0,
-        gdRowH: tightPdf ? 5.0 : compactPdf ? 5.4 : 6.4,
-        betweenBlocks: tightPdf ? 1.8 : compactPdf ? 2.0 : 2.6,
-        commentMinH: tightPdf ? 6.2 : compactPdf ? 6.8 : 8.2,
-        afterCommentGap: tightPdf ? 2.0 : compactPdf ? 2.2 : 3.0,
-        signatureH: signatureImage ? (tightPdf ? 8.5 : compactPdf ? 9.5 : 11.5) : 5.8,
+        blockTitleH: tightPdf ? 4.9 : compactPdf ? 5.4 : 6.5,
+        gdHeaderH: tightPdf ? 4.9 : compactPdf ? 5.4 : 6.2,
+        gdRowH: tightPdf ? 5.0 : compactPdf ? 5.6 : 6.8,
+        betweenBlocks: tightPdf ? 1.9 : compactPdf ? 2.2 : 2.8,
+        commentMinH: tightPdf ? 6.4 : compactPdf ? 7.2 : 8.8,
+        afterCommentGap: tightPdf ? 2.0 : compactPdf ? 2.3 : 3.2,
+        signatureH: signatureImage ? (tightPdf ? 8.7 : compactPdf ? 9.8 : 12.0) : 5.8,
         labelFont: tightPdf ? 6.0 : compactPdf ? 6.4 : 7.4,
       };
 
@@ -1622,7 +1688,7 @@ export default function StudentReportCardPage() {
 
       let bottomScale = 1;
       if (baseBottomNeeded > remainingHeight) {
-        bottomScale = Math.max(0.68, remainingHeight / baseBottomNeeded);
+        bottomScale = Math.max(0.72, remainingHeight / baseBottomNeeded);
       }
 
       const sc = (n: number) => Math.max(0.1, round2(n * bottomScale) || n * bottomScale);
@@ -1635,7 +1701,6 @@ export default function StudentReportCardPage() {
       const gdFont = Math.max(4.8, sc(tightPdf ? 5.0 : compactPdf ? 5.4 : 6.4));
       const commentContentH = Math.max(sc(base.commentMinH), sc(baseCommentContentH));
       const afterCommentGap = sc(base.afterCommentGap);
-      const signatureH = sc(base.signatureH);
       const sigLabelFont = Math.max(5.0, sc(base.labelFont));
 
       const gd1 = tightPdf ? 12 : compactPdf ? 13 : 16;
@@ -1754,6 +1819,7 @@ export default function StudentReportCardPage() {
 
       pdf.setDrawColor(148, 163, 184);
       pdf.line(classSigX + 32, signatureY + 0.9, classSigX + sigColW, signatureY + 0.9);
+      pdf.line(headSigX + 35, signatureY + 0.9, headSigX + sigColW, signatureY + 0.9);
 
       pdf.save(`${safeFileName(fullName)} Report Card.pdf`);
     } finally {
