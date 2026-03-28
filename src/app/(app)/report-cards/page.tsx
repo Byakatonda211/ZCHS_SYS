@@ -493,8 +493,11 @@ async function buildStudentReportPayload(params: {
   const loadedStudent: StudentApiRow | null = studentData?.student ?? null;
   if (!loadedStudent) throw new Error("Student not found.");
 
-  const activeEnrollment = loadedStudent.enrollments?.find((e) => e?.isActive) ?? null;
-  if (!activeEnrollment) throw new Error("Student has no active enrollment.");
+  const activeEnrollmentFound =
+     loadedStudent.enrollments?.find((e) => e?.isActive) ?? null;
+  if (!activeEnrollmentFound) throw new Error("Student has no active enrollment.");
+
+  const activeEnrollment = activeEnrollmentFound;
 
   const enrolledSubjectsMap = new Map<string, { subjectId: string; subjectName: string }>();
   for (const s of activeEnrollment.subjects || []) {
