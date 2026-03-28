@@ -1819,7 +1819,6 @@ export default function StudentReportCardPage() {
 
       pdf.setDrawColor(148, 163, 184);
       pdf.line(classSigX + 32, signatureY + 0.9, classSigX + sigColW, signatureY + 0.9);
-      pdf.line(headSigX + 35, signatureY + 0.9, headSigX + sigColW, signatureY + 0.9);
 
       pdf.save(`${safeFileName(fullName)} Report Card.pdf`);
     } finally {
