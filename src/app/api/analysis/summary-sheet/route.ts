@@ -558,18 +558,19 @@ export async function GET(req: Request) {
 
     doc.end();
     const pdf = await pdfPromise;
+    const pdfBytes = new Uint8Array(pdf);
 
     const filename = `${cls.name}-${reportType}-summary-sheet.pdf`
-      .replace(/\s+/g, "_")
-      .replace(/[^\w.-]+/g, "");
+       .replace(/\s+/g, "_")
+       .replace(/[^\w.-]+/g, "");
 
-    return new NextResponse(pdf, {
+    return new NextResponse(pdfBytes, {
       status: 200,
       headers: {
         "Content-Type": "application/pdf",
         "Content-Disposition": `attachment; filename="${filename}"`,
       },
-    });
+  });
   } catch (e: any) {
     const msg = e?.message || "Error";
     const code =
