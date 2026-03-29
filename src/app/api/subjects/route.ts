@@ -2,29 +2,46 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 
+async function resolveClass(classId: string, className: string) {
+  if (classId) {
+    const byId = await prisma.class.findUnique({
+      where: { id: classId },
+      select: { id: true, name: true, level: true },
+    });
+    if (byId) return byId;
+  }
+
+  if (className) {
+    const byName = await prisma.class.findUnique({
+      where: { name: className },
+      select: { id: true, name: true, level: true },
+    });
+    if (byName) return byName;
+  }
+
+  return null;
+}
+
 export async function GET(req: Request) {
   try {
     const user = await requireUser();
 
     const { searchParams } = new URL(req.url);
     const classId = (searchParams.get("classId") || "").trim();
-    if (!classId) {
+    const className = (searchParams.get("className") || "").trim();
+
+    if (!classId && !className) {
       return NextResponse.json({ error: "Missing classId" }, { status: 400 });
     }
 
-    const cls = await prisma.class.findUnique({
-      where: { id: classId },
-      select: { level: true },
-    });
-
+    const cls = await resolveClass(classId, className);
     if (!cls) return NextResponse.json([]);
 
-    // Admin can see all subjects for the class level
     if (user.role === "ADMIN") {
       const rows = await prisma.subject.findMany({
         where: {
           isActive: true,
-          level: String(cls.level),
+          level: cls.level,
         },
         orderBy: [{ name: "asc" }],
         select: {
@@ -40,11 +57,10 @@ export async function GET(req: Request) {
       return NextResponse.json(rows);
     }
 
-    // Use the SAME permission source as marks routes
     const assignments = await prisma.teachingAssignment.findMany({
       where: {
         userId: user.id,
-        classId,
+        classId: cls.id,
       },
       select: {
         isClassTeacher: true,
@@ -56,12 +72,11 @@ export async function GET(req: Request) {
       return NextResponse.json([]);
     }
 
-    // Class teacher for this class can see all subjects
     if (assignments.some((a) => a.isClassTeacher)) {
       const rows = await prisma.subject.findMany({
         where: {
           isActive: true,
-          level: String(cls.level),
+          level: cls.level,
         },
         orderBy: [{ name: "asc" }],
         select: {
@@ -77,7 +92,6 @@ export async function GET(req: Request) {
       return NextResponse.json(rows);
     }
 
-    // Subject teacher can only see assigned subjects
     const subjectIds = assignments
       .map((a) => a.subjectId)
       .filter((id): id is string => Boolean(id));
@@ -90,7 +104,7 @@ export async function GET(req: Request) {
       where: {
         id: { in: subjectIds },
         isActive: true,
-        level: String(cls.level),
+        level: cls.level,
       },
       orderBy: [{ name: "asc" }],
       select: {
