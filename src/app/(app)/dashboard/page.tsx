@@ -4,8 +4,6 @@ import React from "react";
 import { useRouter } from "next/navigation";
 import {
   ResponsiveContainer,
-  AreaChart,
-  Area,
   BarChart,
   Bar,
   PieChart,
@@ -17,7 +15,7 @@ import {
   CartesianGrid,
   Legend,
 } from "recharts";
-import { Card, CardHeader, Button, Select, Badge } from "@/components/ui";
+import { Card, CardHeader, Select, Badge } from "@/components/ui";
 
 type Me = {
   id: string;
@@ -34,6 +32,25 @@ type Option = {
 };
 
 type DashboardView = "marks" | "students" | "subjects" | "classes";
+
+type GradeCounts = {
+  A: number;
+  B: number;
+  C: number;
+  D: number;
+  E: number;
+  O?: number;
+  F?: number;
+};
+
+type StudentRank = {
+  studentId: string;
+  name: string;
+  admissionNo: string | null;
+  average: number;
+  subjectsCounted: number;
+  position: number;
+};
 
 type DashboardStats = {
   me: Me;
@@ -63,18 +80,13 @@ type DashboardStats = {
     enrolledStudents: number;
     expectedEntries: number;
     enteredEntries: number;
+    partialEntries?: number;
     completion: number;
     missingEntries: number;
     status: "Complete" | "In Progress" | "Not Started";
   }[];
-  bestStudents: {
-    studentId: string;
-    name: string;
-    admissionNo: string | null;
-    average: number;
-    subjectsCounted: number;
-    position: number;
-  }[];
+  bestStudents: StudentRank[];
+  bottomStudents: StudentRank[];
   bestSubjects: {
     subjectId: string;
     subjectName: string;
@@ -82,6 +94,7 @@ type DashboardStats = {
     average: number;
     studentsCounted: number;
     gradeHint: string;
+    gradeCounts: GradeCounts;
   }[];
   classEnrollment: {
     classId: string;
@@ -245,39 +258,31 @@ function Icon({
 const quickAdmin = [
   {
     title: "Add Student",
-    desc: "Register new learner",
+    desc: "Register learner",
     href: "/students/new",
     icon: "student" as const,
-    accent: "from-blue-500 to-cyan-400",
-    bg: "bg-blue-50",
-    text: "text-blue-700",
+    box: "bg-blue-50 text-blue-700 border-blue-100",
   },
   {
     title: "Students",
-    desc: "View and manage",
+    desc: "Manage records",
     href: "/students",
     icon: "users" as const,
-    accent: "from-violet-500 to-fuchsia-400",
-    bg: "bg-violet-50",
-    text: "text-violet-700",
+    box: "bg-violet-50 text-violet-700 border-violet-100",
   },
   {
     title: "Enter Marks",
     desc: "Capture scores",
     href: "/marks",
     icon: "marks" as const,
-    accent: "from-emerald-500 to-teal-400",
-    bg: "bg-emerald-50",
-    text: "text-emerald-700",
+    box: "bg-emerald-50 text-emerald-700 border-emerald-100",
   },
   {
     title: "Report Cards",
     desc: "Generate reports",
     href: "/report-cards",
     icon: "report" as const,
-    accent: "from-amber-500 to-orange-400",
-    bg: "bg-amber-50",
-    text: "text-amber-700",
+    box: "bg-amber-50 text-amber-700 border-amber-100",
   },
 ];
 
@@ -287,27 +292,21 @@ const quickTeacher = [
     desc: "View learners",
     href: "/students",
     icon: "users" as const,
-    accent: "from-violet-500 to-fuchsia-400",
-    bg: "bg-violet-50",
-    text: "text-violet-700",
+    box: "bg-violet-50 text-violet-700 border-violet-100",
   },
   {
     title: "Enter Marks",
     desc: "Capture scores",
     href: "/marks",
     icon: "marks" as const,
-    accent: "from-emerald-500 to-teal-400",
-    bg: "bg-emerald-50",
-    text: "text-emerald-700",
+    box: "bg-emerald-50 text-emerald-700 border-emerald-100",
   },
   {
     title: "Analysis",
     desc: "Performance view",
     href: "/analysis",
     icon: "chart" as const,
-    accent: "from-blue-500 to-cyan-400",
-    bg: "bg-blue-50",
-    text: "text-blue-700",
+    box: "bg-blue-50 text-blue-700 border-blue-100",
   },
 ];
 
@@ -316,35 +315,40 @@ const viewTabs: {
   label: string;
   subtitle: string;
   icon: "chart" | "award" | "book" | "school";
-  accent: string;
+  active: string;
+  iconBox: string;
 }[] = [
   {
     key: "marks",
     label: "Marks Entry",
     subtitle: "Subject completion",
     icon: "chart",
-    accent: "from-blue-600 to-cyan-500",
+    active: "bg-blue-600 border-blue-600 text-white",
+    iconBox: "bg-blue-50 text-blue-700",
   },
   {
     key: "students",
-    label: "Best Students",
-    subtitle: "Top learners",
+    label: "Students",
+    subtitle: "Best and support list",
     icon: "award",
-    accent: "from-violet-600 to-fuchsia-500",
+    active: "bg-violet-600 border-violet-600 text-white",
+    iconBox: "bg-violet-50 text-violet-700",
   },
   {
     key: "subjects",
-    label: "Best Subjects",
-    subtitle: "Subject ranking",
+    label: "Subjects",
+    subtitle: "Ranking and grades",
     icon: "book",
-    accent: "from-emerald-600 to-teal-500",
+    active: "bg-emerald-600 border-emerald-600 text-white",
+    iconBox: "bg-emerald-50 text-emerald-700",
   },
   {
     key: "classes",
-    label: "Class Overview",
-    subtitle: "Enrollment spread",
+    label: "Classes",
+    subtitle: "Enrollment overview",
     icon: "school",
-    accent: "from-amber-500 to-orange-500",
+    active: "bg-amber-500 border-amber-500 text-white",
+    iconBox: "bg-amber-50 text-amber-700",
   },
 ];
 
@@ -358,17 +362,6 @@ function pct(v: number) {
 function clampPct(v: number) {
   if (!Number.isFinite(v)) return 0;
   return Math.max(0, Math.min(100, v));
-}
-
-function shortName(name: string) {
-  if (!name) return "";
-  if (name.length <= 12) return name;
-  return name
-    .split(/\s+/)
-    .map((w) => w[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 6);
 }
 
 function initials(name: string) {
@@ -388,67 +381,82 @@ function statusPill(status: string) {
 }
 
 function completionBar(status: string) {
-  if (status === "Complete") return "bg-gradient-to-r from-emerald-500 to-teal-400";
-  if (status === "In Progress") return "bg-gradient-to-r from-amber-500 to-orange-400";
-  return "bg-gradient-to-r from-rose-500 to-red-400";
+  if (status === "Complete") return "bg-emerald-500";
+  if (status === "In Progress") return "bg-amber-500";
+  return "bg-rose-500";
 }
 
-function PremiumStatCard({
-  title,
-  value,
-  hint,
-  icon,
-  accent,
-  bg,
-  text,
-}: {
-  title: string;
-  value: string | number;
-  hint: string;
-  icon: "student" | "teacher" | "chart" | "school";
-  accent: string;
-  bg: string;
-  text: string;
-}) {
+function ProgressRing({ value }: { value: number }) {
+  const safe = clampPct(value);
+  const radius = 38;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference - (safe / 100) * circumference;
+
   return (
-    <div className="group relative overflow-hidden rounded-3xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg">
-      <div className={`absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r ${accent}`} />
-      <div className="absolute -right-8 -top-8 h-24 w-24 rounded-full bg-slate-100 opacity-70 transition group-hover:scale-110" />
-
-      <div className="relative flex items-start justify-between gap-4">
-        <div>
-          <div className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">
-            {title}
-          </div>
-          <div className="mt-3 text-2xl font-black tracking-tight text-slate-950">
-            {value}
-          </div>
-          <div className="mt-1 text-xs leading-5 text-slate-500">{hint}</div>
-        </div>
-
-        <div className={`rounded-2xl ${bg} p-3 ${text}`}>
-          <Icon name={icon} className="h-5 w-5" />
-        </div>
+    <div className="relative flex h-24 w-24 items-center justify-center">
+      <svg className="h-24 w-24 -rotate-90" viewBox="0 0 100 100">
+        <circle
+          cx="50"
+          cy="50"
+          r={radius}
+          stroke="rgba(255,255,255,0.25)"
+          strokeWidth="10"
+          fill="none"
+        />
+        <circle
+          cx="50"
+          cy="50"
+          r={radius}
+          stroke="white"
+          strokeWidth="10"
+          fill="none"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+        />
+      </svg>
+      <div className="absolute text-center">
+        <div className="text-xl font-black text-white">{pct(safe)}</div>
+        <div className="text-[10px] font-bold uppercase tracking-wide text-blue-100">Done</div>
       </div>
     </div>
   );
 }
 
-function CompletionRing({ value }: { value: number }) {
-  const safe = clampPct(value);
+function StatCard({
+  title,
+  value,
+  hint,
+  icon,
+  color,
+}: {
+  title: string;
+  value: string | number;
+  hint: string;
+  icon: "student" | "teacher" | "chart" | "school";
+  color: "blue" | "violet" | "emerald" | "amber";
+}) {
+  const styles = {
+    blue: { top: "bg-blue-500", icon: "bg-blue-50 text-blue-700" },
+    violet: { top: "bg-violet-500", icon: "bg-violet-50 text-violet-700" },
+    emerald: { top: "bg-emerald-500", icon: "bg-emerald-50 text-emerald-700" },
+    amber: { top: "bg-amber-500", icon: "bg-amber-50 text-amber-700" },
+  }[color];
 
   return (
-    <div className="relative flex h-32 w-32 items-center justify-center rounded-full bg-slate-100">
-      <div
-        className="absolute inset-0 rounded-full"
-        style={{
-          background: `conic-gradient(#22c55e ${safe * 3.6}deg, #e2e8f0 0deg)`,
-        }}
-      />
-      <div className="relative flex h-24 w-24 flex-col items-center justify-center rounded-full bg-white shadow-inner">
-        <div className="text-2xl font-black text-slate-950">{pct(safe)}</div>
-        <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
-          Done
+    <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 text-slate-900 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+      <div className={`absolute inset-x-0 top-0 h-1 ${styles.top}`} />
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">
+            {title}
+          </div>
+          <div className="mt-3 truncate text-2xl font-black text-slate-950">{value}</div>
+          <div className="mt-1 text-xs leading-5 text-slate-500">{hint}</div>
+        </div>
+
+        <div className={`shrink-0 rounded-xl p-2.5 ${styles.icon}`}>
+          <Icon name={icon} className="h-5 w-5" />
         </div>
       </div>
     </div>
@@ -457,12 +465,55 @@ function CompletionRing({ value }: { value: number }) {
 
 function EmptyState({ message }: { message: string }) {
   return (
-    <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
-      <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-slate-400 shadow-sm">
+    <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-slate-700">
+      <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-white text-slate-400 shadow-sm">
         <Icon name="spark" className="h-5 w-5" />
       </div>
       <div className="mt-3 text-sm font-semibold text-slate-600">{message}</div>
     </div>
+  );
+}
+
+function StudentRow({ student, kind }: { student: StudentRank; kind: "top" | "support" }) {
+  const isSupport = kind === "support";
+
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-3 text-slate-900 shadow-sm">
+      <div className="flex min-w-0 items-center gap-3">
+        <div
+          className={
+            isSupport
+              ? "relative flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-sm font-black text-rose-700"
+              : "relative flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-violet-600 text-sm font-black text-white"
+          }
+        >
+          {initials(student.name)}
+          <div className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-slate-950 text-[10px] font-black text-white">
+            {student.position}
+          </div>
+        </div>
+
+        <div className="min-w-0">
+          <div className="truncate text-sm font-black text-slate-950">{student.name}</div>
+          <div className="text-xs text-slate-500">{student.subjectsCounted} subjects counted</div>
+        </div>
+      </div>
+
+      <div className="shrink-0 text-right">
+        <div className={isSupport ? "text-lg font-black text-rose-700" : "text-lg font-black text-slate-950"}>
+          {student.average}
+        </div>
+        <div className="text-[11px] text-slate-500">Average</div>
+      </div>
+    </div>
+  );
+}
+
+function GradeMiniPill({ label, value, color }: { label: string; value: number; color: string }) {
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-black ${color}`}>
+      {label}: {value}
+    </span>
   );
 }
 
@@ -552,29 +603,6 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router]);
 
-  const completionData =
-    stats?.marksStatus.map((s) => ({
-      name: shortName(s.subjectCode || s.subjectName),
-      subject: s.subjectName,
-      completion: s.completion,
-      entered: s.enteredEntries,
-      expected: s.expectedEntries,
-    })) ?? [];
-
-  const bestStudentsData =
-    stats?.bestStudents.slice(0, 10).map((s) => ({
-      name: s.name.split(" ")[0],
-      fullName: s.name,
-      average: s.average,
-    })) ?? [];
-
-  const bestSubjectsData =
-    stats?.bestSubjects.slice(0, 10).map((s) => ({
-      name: shortName(s.subjectCode || s.subjectName),
-      subject: s.subjectName,
-      average: s.average,
-    })) ?? [];
-
   const classData =
     stats?.classEnrollment.map((c) => ({
       name: c.className,
@@ -583,80 +611,73 @@ export default function DashboardPage() {
 
   const completedSubjects = stats?.marksStatus.filter((s) => s.status === "Complete").length ?? 0;
   const pendingSubjects = stats?.marksStatus.filter((s) => s.status === "Not Started").length ?? 0;
-  const inProgressSubjects =
-    stats?.marksStatus.filter((s) => s.status === "In Progress").length ?? 0;
+  const inProgressSubjects = stats?.marksStatus.filter((s) => s.status === "In Progress").length ?? 0;
 
   return (
-    <div className="min-h-screen space-y-5 bg-slate-50/40">
-      <div className="relative overflow-hidden rounded-[2rem] border border-white/30 bg-gradient-to-br from-slate-950 via-blue-950 to-indigo-950 p-5 text-white shadow-xl sm:p-6">
-        <div className="absolute -left-16 -top-16 h-56 w-56 rounded-full bg-blue-500/25 blur-3xl" />
-        <div className="absolute right-0 top-0 h-64 w-64 rounded-full bg-cyan-400/15 blur-3xl" />
-        <div className="absolute bottom-0 right-40 h-48 w-48 rounded-full bg-fuchsia-500/10 blur-3xl" />
-
-        <div className="relative grid grid-cols-1 gap-6 xl:grid-cols-[1.5fr_1fr]">
-          <div className="flex flex-col justify-between gap-6">
-            <div>
-              <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-xs font-semibold text-slate-100 backdrop-blur">
-                <Icon name="spark" className="h-4 w-4 text-cyan-300" />
-                {isAdmin ? "Administrator Control Centre" : "Teacher Dashboard"}
-              </div>
-
-              <h1 className="mt-5 max-w-3xl text-3xl font-black tracking-tight sm:text-4xl">
-                Welcome back{stats?.me?.fullName ? `, ${stats.me.fullName.split(" ")[0]}` : ""}
-              </h1>
-
-              <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">
-                A live overview of marks entry, class performance, subject strength,
-                top learners, and academic activity across the school.
-              </p>
+    <div className="space-y-5 bg-slate-50/40 text-slate-900">
+      <div className="relative overflow-hidden rounded-2xl border border-blue-700 bg-blue-700 p-5 text-white shadow-md sm:p-6">
+        <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1.5fr_0.8fr]">
+          <div>
+            <div className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white">
+              <Icon name="spark" className="h-4 w-4 text-white" />
+              {isAdmin ? "Administrator Dashboard" : "Teacher Dashboard"}
             </div>
 
-            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <h1 className="mt-5 max-w-3xl text-3xl font-black tracking-tight text-white sm:text-4xl">
+              Welcome back{stats?.me?.fullName ? `, ${stats.me.fullName.split(" ")[0]}` : ""}
+            </h1>
+
+            <p className="mt-3 max-w-3xl text-sm leading-6 text-blue-50">
+              View marks entry progress, learner ranking, subject performance, and class-level
+              activity from one clean dashboard.
+            </p>
+
+            <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
               {quick.map((q) => (
                 <button
                   key={q.title}
                   onClick={() => router.push(q.href)}
-                  className="group rounded-2xl border border-white/10 bg-white/10 p-3 text-left backdrop-blur transition hover:-translate-y-0.5 hover:bg-white/15"
+                  className="group rounded-xl border border-white/20 bg-white p-3 text-left text-slate-900 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
                 >
-                  <div className={`mb-3 inline-flex rounded-xl ${q.bg} p-2 ${q.text}`}>
+                  <div className={`mb-3 inline-flex rounded-xl border p-2 ${q.box}`}>
                     <Icon name={q.icon} className="h-4 w-4" />
                   </div>
-                  <div className="text-sm font-black text-white">{q.title}</div>
-                  <div className="mt-0.5 text-xs text-slate-300">{q.desc}</div>
+                  <div className="text-sm font-black text-slate-950">{q.title}</div>
+                  <div className="mt-0.5 text-xs text-slate-500">{q.desc}</div>
                 </button>
               ))}
             </div>
           </div>
 
-          <div className="rounded-[1.75rem] border border-white/10 bg-white/10 p-4 backdrop-blur">
+          <div className="rounded-2xl border border-white/20 bg-white/10 p-4 text-white">
             <div className="flex items-center justify-between gap-4">
               <div>
-                <div className="text-xs font-bold uppercase tracking-[0.16em] text-slate-300">
+                <div className="text-xs font-bold uppercase tracking-[0.16em] text-blue-100">
                   Marks Completion
                 </div>
-                <div className="mt-2 text-3xl font-black">
+                <div className="mt-2 text-2xl font-black text-white">
                   {loading ? "..." : pct(stats?.summary.overallMarksCompletion ?? 0)}
                 </div>
-                <div className="mt-1 text-xs text-slate-300">
+                <div className="mt-1 text-xs text-blue-100">
                   {stats?.summary.activeAssessmentName || "Selected assessment"}
                 </div>
               </div>
 
-              <CompletionRing value={stats?.summary.overallMarksCompletion ?? 0} />
+              <ProgressRing value={stats?.summary.overallMarksCompletion ?? 0} />
             </div>
 
             <div className="mt-5 grid grid-cols-3 gap-2">
-              <div className="rounded-2xl bg-white/10 p-3">
-                <div className="text-xl font-black">{completedSubjects}</div>
-                <div className="text-[11px] text-slate-300">Complete</div>
+              <div className="rounded-xl bg-white/15 p-3">
+                <div className="text-xl font-black text-white">{completedSubjects}</div>
+                <div className="text-[11px] text-blue-100">Complete</div>
               </div>
-              <div className="rounded-2xl bg-white/10 p-3">
-                <div className="text-xl font-black">{inProgressSubjects}</div>
-                <div className="text-[11px] text-slate-300">Progress</div>
+              <div className="rounded-xl bg-white/15 p-3">
+                <div className="text-xl font-black text-white">{inProgressSubjects}</div>
+                <div className="text-[11px] text-blue-100">Progress</div>
               </div>
-              <div className="rounded-2xl bg-white/10 p-3">
-                <div className="text-xl font-black">{pendingSubjects}</div>
-                <div className="text-[11px] text-slate-300">Pending</div>
+              <div className="rounded-xl bg-white/15 p-3">
+                <div className="text-xl font-black text-white">{pendingSubjects}</div>
+                <div className="text-[11px] text-blue-100">Pending</div>
               </div>
             </div>
           </div>
@@ -664,65 +685,57 @@ export default function DashboardPage() {
       </div>
 
       {error ? (
-        <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
+        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
           {error}
         </div>
       ) : null}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <PremiumStatCard
+        <StatCard
           title="Students"
           value={loading ? "..." : stats?.summary.studentsCount ?? 0}
           hint="Active learners in the system"
           icon="student"
-          accent="from-blue-500 to-cyan-400"
-          bg="bg-blue-50"
-          text="text-blue-700"
+          color="blue"
         />
 
-        <PremiumStatCard
+        <StatCard
           title="Teachers"
           value={loading ? "..." : stats?.summary.teachersCount ?? 0}
           hint="Active teaching staff"
           icon="teacher"
-          accent="from-violet-500 to-fuchsia-400"
-          bg="bg-violet-50"
-          text="text-violet-700"
+          color="violet"
         />
 
-        <PremiumStatCard
+        <StatCard
           title="Active Class"
           value={loading ? "..." : stats?.summary.activeClassName || "-"}
           hint={`Term: ${stats?.summary.activeTermName || "-"}`}
           icon="school"
-          accent="from-emerald-500 to-teal-400"
-          bg="bg-emerald-50"
-          text="text-emerald-700"
+          color="emerald"
         />
 
-        <PremiumStatCard
+        <StatCard
           title="Completion"
           value={loading ? "..." : pct(stats?.summary.overallMarksCompletion ?? 0)}
           hint={`Assessment: ${stats?.summary.activeAssessmentName || "-"}`}
           icon="chart"
-          accent="from-amber-500 to-orange-400"
-          bg="bg-amber-50"
-          text="text-amber-700"
+          color="amber"
         />
       </div>
 
-      <div className="rounded-[1.75rem] border border-slate-200 bg-white/90 p-4 shadow-sm backdrop-blur">
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 text-slate-900 shadow-sm">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <div className="text-sm font-black text-slate-950">Dashboard Filters</div>
             <div className="mt-1 text-xs text-slate-500">
-              Select the academic scope for the statistics and visuals.
+              Select the academic scope for the statistics below.
             </div>
           </div>
 
           <button
             onClick={() => loadDashboard()}
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-slate-950 px-4 text-sm font-bold text-white shadow-sm transition hover:bg-slate-800"
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-950 px-4 text-sm font-bold text-white shadow-sm transition hover:bg-slate-800"
           >
             <Icon name="refresh" className="h-4 w-4" />
             Refresh
@@ -737,7 +750,7 @@ export default function DashboardPage() {
               setAcademicYearId(value);
               loadDashboard({ academicYearId: value });
             }}
-            className="h-11 rounded-2xl border-slate-200 bg-slate-50"
+            className="h-11 rounded-xl border-slate-200 bg-slate-50 text-slate-900"
           >
             {stats?.filters.academicYears.map((y) => (
               <option key={y.id} value={y.id}>
@@ -753,7 +766,7 @@ export default function DashboardPage() {
               setTermId(value);
               loadDashboard({ termId: value });
             }}
-            className="h-11 rounded-2xl border-slate-200 bg-slate-50"
+            className="h-11 rounded-xl border-slate-200 bg-slate-50 text-slate-900"
           >
             {stats?.filters.terms.map((t) => (
               <option key={t.id} value={t.id}>
@@ -769,7 +782,7 @@ export default function DashboardPage() {
               setClassId(value);
               loadDashboard({ classId: value });
             }}
-            className="h-11 rounded-2xl border-slate-200 bg-slate-50"
+            className="h-11 rounded-xl border-slate-200 bg-slate-50 text-slate-900"
           >
             {stats?.filters.classes.map((c) => (
               <option key={c.id} value={c.id}>
@@ -785,7 +798,7 @@ export default function DashboardPage() {
               setAssessmentDefinitionId(value);
               loadDashboard({ assessmentDefinitionId: value });
             }}
-            className="h-11 rounded-2xl border-slate-200 bg-slate-50"
+            className="h-11 rounded-xl border-slate-200 bg-slate-50 text-slate-900"
           >
             {stats?.filters.assessments.map((a) => (
               <option key={a.id} value={a.id}>
@@ -805,35 +818,31 @@ export default function DashboardPage() {
               key={tab.key}
               onClick={() => setView(tab.key)}
               className={[
-                "group relative overflow-hidden rounded-3xl border p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md",
-                active
-                  ? "border-transparent bg-slate-950 text-white"
-                  : "border-slate-200 bg-white text-slate-950",
+                "rounded-2xl border p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md",
+                active ? tab.active : "border-slate-200 bg-white text-slate-950",
               ].join(" ")}
             >
-              {active ? (
-                <div className={`absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r ${tab.accent}`} />
-              ) : null}
-
               <div className="flex items-start justify-between gap-3">
                 <div
                   className={[
-                    "rounded-2xl p-2.5",
-                    active ? "bg-white/10 text-white" : "bg-slate-100 text-slate-700",
+                    "rounded-xl p-2.5",
+                    active ? "bg-white/20 text-white" : tab.iconBox,
                   ].join(" ")}
                 >
                   <Icon name={tab.icon} className="h-5 w-5" />
                 </div>
 
                 {active ? (
-                  <span className="rounded-full bg-white/10 px-2 py-1 text-[10px] font-bold text-white">
+                  <span className="rounded-full bg-white/20 px-2 py-1 text-[10px] font-bold text-white">
                     Active
                   </span>
                 ) : null}
               </div>
 
-              <div className="mt-4 text-sm font-black">{tab.label}</div>
-              <div className={active ? "mt-1 text-xs text-slate-300" : "mt-1 text-xs text-slate-500"}>
+              <div className={active ? "mt-4 text-sm font-black text-white" : "mt-4 text-sm font-black text-slate-950"}>
+                {tab.label}
+              </div>
+              <div className={active ? "mt-1 text-xs text-white/85" : "mt-1 text-xs text-slate-500"}>
                 {tab.subtitle}
               </div>
             </button>
@@ -842,184 +851,98 @@ export default function DashboardPage() {
       </div>
 
       {view === "marks" ? (
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-5">
-          <Card className="overflow-hidden rounded-[1.75rem] border-slate-200 bg-white shadow-sm xl:col-span-3">
-            <div className="flex flex-col gap-3 border-b border-slate-100 p-5 sm:flex-row sm:items-start sm:justify-between">
+        <Card className="overflow-hidden rounded-2xl border-slate-200 bg-white text-slate-900 shadow-sm">
+          <div className="flex flex-col gap-3 border-b border-slate-100 p-5 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex items-center gap-2">
+              <div className="rounded-xl bg-blue-50 p-2 text-blue-700">
+                <Icon name="chart" className="h-5 w-5" />
+              </div>
               <div>
-                <div className="flex items-center gap-2">
-                  <div className="rounded-2xl bg-blue-50 p-2 text-blue-700">
-                    <Icon name="chart" className="h-5 w-5" />
+                <h2 className="text-base font-black text-slate-950">Marks Entry Status</h2>
+                <p className="text-xs text-slate-500">
+                  Each subject shows how many learner-subject entries are fully captured.
+                </p>
+              </div>
+            </div>
+
+            <Badge className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-blue-700">
+              {pct(stats?.summary.overallMarksCompletion ?? 0)}
+            </Badge>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 p-5 md:grid-cols-2 xl:grid-cols-3">
+            {stats?.marksStatus.length ? (
+              stats.marksStatus.map((s) => (
+                <div
+                  key={s.subjectId}
+                  className="rounded-2xl border border-slate-200 bg-white p-4 text-slate-900 shadow-sm"
+                >
+                  <div className="mb-3 flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-black text-slate-950">{s.subjectName}</div>
+                      <div className="mt-0.5 text-xs text-slate-500">
+                        {s.enteredEntries}/{s.expectedEntries} complete
+                        {typeof s.partialEntries === "number" && s.partialEntries > 0
+                          ? ` • ${s.partialEntries} partial`
+                          : ""}
+                      </div>
+                    </div>
+
+                    <span
+                      className={`rounded-full border px-2.5 py-1 text-[11px] font-bold ${statusPill(s.status)}`}
+                    >
+                      {s.status}
+                    </span>
                   </div>
-                  <div>
-                    <h2 className="text-base font-black text-slate-950">
-                      Marks Entry Progress
-                    </h2>
-                    <p className="text-xs text-slate-500">
-                      Subject-by-subject completion for the selected assessment.
-                    </p>
+
+                  <div className="h-2.5 overflow-hidden rounded-full bg-slate-200">
+                    <div
+                      className={`h-full rounded-full ${completionBar(s.status)}`}
+                      style={{ width: `${clampPct(s.completion)}%` }}
+                    />
+                  </div>
+
+                  <div className="mt-2 flex items-center justify-between text-[11px] font-medium text-slate-500">
+                    <span>{s.enrolledStudents} students</span>
+                    <span>{pct(s.completion)}</span>
                   </div>
                 </div>
-              </div>
-
-              <Badge className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-blue-700">
-                {pct(stats?.summary.overallMarksCompletion ?? 0)}
-              </Badge>
-            </div>
-
-            <div className="h-80 p-5">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={completionData}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                  <XAxis dataKey="name" tick={{ fontSize: 12, fill: "#64748b" }} />
-                  <YAxis domain={[0, 100]} tick={{ fontSize: 12, fill: "#64748b" }} />
-                  <Tooltip
-                    cursor={{ fill: "#f8fafc" }}
-                    formatter={(value: any, _name: any, item: any) => [
-                      `${value}%`,
-                      item?.payload?.subject || "Completion",
-                    ]}
-                  />
-                  <Bar dataKey="completion" fill="#2563eb" radius={[10, 10, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </Card>
-
-          <Card className="overflow-hidden rounded-[1.75rem] border-slate-200 bg-white shadow-sm xl:col-span-2">
-            <CardHeader
-              title="Subject Status"
-              subtitle="Complete, partial, or pending mark entry."
-            />
-
-            <div className="max-h-[22rem] space-y-3 overflow-auto p-5 pt-0">
-              {stats?.marksStatus.length ? (
-                stats.marksStatus.map((s) => (
-                  <div
-                    key={s.subjectId}
-                    className="rounded-3xl border border-slate-200 bg-gradient-to-br from-white to-slate-50 p-4"
-                  >
-                    <div className="mb-3 flex items-start justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-black text-slate-950">{s.subjectName}</div>
-                        <div className="mt-0.5 text-xs text-slate-500">
-                          {s.enteredEntries}/{s.expectedEntries} entries captured
-                        </div>
-                      </div>
-
-                      <span
-                        className={`rounded-full border px-2.5 py-1 text-[11px] font-bold ${statusPill(
-                          s.status
-                        )}`}
-                      >
-                        {s.status}
-                      </span>
-                    </div>
-
-                    <div className="h-2.5 overflow-hidden rounded-full bg-slate-200">
-                      <div
-                        className={`h-full rounded-full ${completionBar(s.status)}`}
-                        style={{ width: `${clampPct(s.completion)}%` }}
-                      />
-                    </div>
-
-                    <div className="mt-2 flex items-center justify-between text-[11px] font-medium text-slate-500">
-                      <span>{s.enrolledStudents} students</span>
-                      <span>{pct(s.completion)}</span>
-                    </div>
-                  </div>
-                ))
-              ) : (
+              ))
+            ) : (
+              <div className="md:col-span-2 xl:col-span-3">
                 <EmptyState message="No marks-entry data found for the selected filters." />
-              )}
-            </div>
-          </Card>
-        </div>
+              </div>
+            )}
+          </div>
+        </Card>
       ) : null}
 
       {view === "students" ? (
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-5">
-          <Card className="overflow-hidden rounded-[1.75rem] border-slate-200 bg-white shadow-sm xl:col-span-3">
-            <div className="border-b border-slate-100 p-5">
-              <div className="flex items-center gap-2">
-                <div className="rounded-2xl bg-violet-50 p-2 text-violet-700">
-                  <Icon name="award" className="h-5 w-5" />
-                </div>
-                <div>
-                  <h2 className="text-base font-black text-slate-950">Top Students</h2>
-                  <p className="text-xs text-slate-500">
-                    Best-performing learners in the selected class.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="h-80 p-5">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={bestStudentsData}>
-                  <defs>
-                    <linearGradient id="studentsFillPremium" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.42} />
-                      <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0.04} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                  <XAxis dataKey="name" tick={{ fontSize: 12, fill: "#64748b" }} />
-                  <YAxis domain={[0, 100]} tick={{ fontSize: 12, fill: "#64748b" }} />
-                  <Tooltip
-                    cursor={{ stroke: "#8b5cf6", strokeWidth: 1 }}
-                    formatter={(value: any, _name: any, item: any) => [
-                      value,
-                      item?.payload?.fullName || "Average",
-                    ]}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="average"
-                    stroke="#8b5cf6"
-                    fill="url(#studentsFillPremium)"
-                    strokeWidth={3}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          </Card>
-
-          <Card className="overflow-hidden rounded-[1.75rem] border-slate-200 bg-white shadow-sm xl:col-span-2">
-            <CardHeader title="Leaderboard" subtitle="Top 10 students by average." />
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <Card className="overflow-hidden rounded-2xl border-slate-200 bg-white text-slate-900 shadow-sm">
+            <CardHeader title="Best 10 Students" subtitle="Top learners by computed average." />
 
             <div className="space-y-3 p-5 pt-0">
               {stats?.bestStudents.length ? (
                 stats.bestStudents.slice(0, 10).map((s) => (
-                  <div
-                    key={s.studentId}
-                    className="flex items-center justify-between rounded-3xl border border-slate-200 bg-gradient-to-br from-white to-violet-50/40 p-3"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="relative">
-                        <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-violet-600 text-sm font-black text-white shadow-sm">
-                          {initials(s.name)}
-                        </div>
-                        <div className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-slate-950 text-[10px] font-black text-white">
-                          {s.position}
-                        </div>
-                      </div>
-
-                      <div>
-                        <div className="text-sm font-black text-slate-950">{s.name}</div>
-                        <div className="text-xs text-slate-500">
-                          {s.subjectsCounted} subjects counted
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="text-right">
-                      <div className="text-lg font-black text-slate-950">{s.average}</div>
-                      <div className="text-[11px] text-slate-500">Average</div>
-                    </div>
-                  </div>
+                  <StudentRow key={s.studentId} student={s} kind="top" />
                 ))
               ) : (
                 <EmptyState message="No student ranking data found." />
+              )}
+            </div>
+          </Card>
+
+          <Card className="overflow-hidden rounded-2xl border-slate-200 bg-white text-slate-900 shadow-sm">
+            <CardHeader title="Last 10 Students" subtitle="Learners who may need academic support." />
+
+            <div className="space-y-3 p-5 pt-0">
+              {stats?.bottomStudents.length ? (
+                stats.bottomStudents.slice(0, 10).map((s) => (
+                  <StudentRow key={s.studentId} student={s} kind="support" />
+                ))
+              ) : (
+                <EmptyState message="No academic support list found." />
               )}
             </div>
           </Card>
@@ -1027,92 +950,85 @@ export default function DashboardPage() {
       ) : null}
 
       {view === "subjects" ? (
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-5">
-          <Card className="overflow-hidden rounded-[1.75rem] border-slate-200 bg-white shadow-sm xl:col-span-3">
-            <div className="border-b border-slate-100 p-5">
-              <div className="flex items-center gap-2">
-                <div className="rounded-2xl bg-emerald-50 p-2 text-emerald-700">
-                  <Icon name="book" className="h-5 w-5" />
-                </div>
-                <div>
-                  <h2 className="text-base font-black text-slate-950">Best Subjects</h2>
-                  <p className="text-xs text-slate-500">
-                    Subject ranking based on computed average score.
-                  </p>
-                </div>
+        <Card className="overflow-hidden rounded-2xl border-slate-200 bg-white text-slate-900 shadow-sm">
+          <div className="border-b border-slate-100 p-5">
+            <div className="flex items-center gap-2">
+              <div className="rounded-xl bg-emerald-50 p-2 text-emerald-700">
+                <Icon name="book" className="h-5 w-5" />
+              </div>
+              <div>
+                <h2 className="text-base font-black text-slate-950">Subject Ranking</h2>
+                <p className="text-xs text-slate-500">
+                  Subjects ranked by average score. A and B counts are shown on each subject.
+                </p>
               </div>
             </div>
+          </div>
 
-            <div className="h-80 p-5">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={bestSubjectsData}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                  <XAxis dataKey="name" tick={{ fontSize: 12, fill: "#64748b" }} />
-                  <YAxis domain={[0, 100]} tick={{ fontSize: 12, fill: "#64748b" }} />
-                  <Tooltip
-                    cursor={{ fill: "#f8fafc" }}
-                    formatter={(value: any, _name: any, item: any) => [
-                      value,
-                      item?.payload?.subject || "Average",
-                    ]}
-                  />
-                  <Bar dataKey="average" fill="#10b981" radius={[10, 10, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </Card>
-
-          <Card className="overflow-hidden rounded-[1.75rem] border-slate-200 bg-white shadow-sm xl:col-span-2">
-            <CardHeader title="Subject Ranking" subtitle="Average score and grade hint." />
-
-            <div className="space-y-3 p-5 pt-0">
-              {stats?.bestSubjects.length ? (
-                stats.bestSubjects.slice(0, 10).map((s, idx) => (
-                  <div
-                    key={s.subjectId}
-                    className="flex items-center justify-between rounded-3xl border border-slate-200 bg-gradient-to-br from-white to-emerald-50/40 p-3"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-emerald-100 text-sm font-black text-emerald-700">
+          <div className="grid grid-cols-1 gap-3 p-5 md:grid-cols-2 xl:grid-cols-3">
+            {stats?.bestSubjects.length ? (
+              stats.bestSubjects.map((s, idx) => (
+                <div
+                  key={s.subjectId}
+                  className="rounded-2xl border border-slate-200 bg-white p-4 text-slate-900 shadow-sm"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-start gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-sm font-black text-emerald-700">
                         {idx + 1}
                       </div>
-                      <div>
-                        <div className="text-sm font-black text-slate-950">{s.subjectName}</div>
-                        <div className="text-xs text-slate-500">
+
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-black text-slate-950">{s.subjectName}</div>
+                        <div className="mt-1 text-xs text-slate-500">
                           {s.studentsCounted} students counted
                         </div>
                       </div>
                     </div>
 
-                    <div className="text-right">
-                      <div className="text-base font-black text-slate-950">{s.average}</div>
-                      <div className="mt-1 inline-flex rounded-full bg-white px-2 py-1 text-[11px] font-black text-emerald-700 shadow-sm">
+                    <div className="shrink-0 text-right">
+                      <div className="text-lg font-black text-slate-950">{s.average}</div>
+                      <div className="mt-1 inline-flex rounded-full bg-emerald-50 px-2 py-1 text-[11px] font-black text-emerald-700">
                         {s.gradeHint}
                       </div>
                     </div>
                   </div>
-                ))
-              ) : (
+
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <GradeMiniPill label="A" value={s.gradeCounts?.A ?? 0} color="bg-emerald-50 text-emerald-700" />
+                    <GradeMiniPill label="B" value={s.gradeCounts?.B ?? 0} color="bg-blue-50 text-blue-700" />
+                    <GradeMiniPill label="C" value={s.gradeCounts?.C ?? 0} color="bg-slate-100 text-slate-700" />
+                    <GradeMiniPill label="D" value={s.gradeCounts?.D ?? 0} color="bg-amber-50 text-amber-700" />
+                    <GradeMiniPill label="E" value={s.gradeCounts?.E ?? 0} color="bg-rose-50 text-rose-700" />
+                    {typeof s.gradeCounts?.O === "number" ? (
+                      <GradeMiniPill label="O" value={s.gradeCounts.O} color="bg-orange-50 text-orange-700" />
+                    ) : null}
+                    {typeof s.gradeCounts?.F === "number" ? (
+                      <GradeMiniPill label="F" value={s.gradeCounts.F} color="bg-red-50 text-red-700" />
+                    ) : null}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="md:col-span-2 xl:col-span-3">
                 <EmptyState message="No subject ranking data found." />
-              )}
-            </div>
-          </Card>
-        </div>
+              </div>
+            )}
+          </div>
+        </Card>
       ) : null}
 
       {view === "classes" ? (
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-5">
-          <Card className="overflow-hidden rounded-[1.75rem] border-slate-200 bg-white shadow-sm xl:col-span-3">
+          <Card className="overflow-hidden rounded-2xl border-slate-200 bg-white text-slate-900 shadow-sm xl:col-span-3">
             <div className="border-b border-slate-100 p-5">
               <div className="flex items-center gap-2">
-                <div className="rounded-2xl bg-amber-50 p-2 text-amber-700">
+                <div className="rounded-xl bg-amber-50 p-2 text-amber-700">
                   <Icon name="school" className="h-5 w-5" />
                 </div>
                 <div>
                   <h2 className="text-base font-black text-slate-950">Enrollment by Class</h2>
-                  <p className="text-xs text-slate-500">
-                    Active learners distributed across classes.
-                  </p>
+                  <p className="text-xs text-slate-500">Active learners distributed across classes.</p>
                 </div>
               </div>
             </div>
@@ -1124,24 +1040,24 @@ export default function DashboardPage() {
                   <XAxis dataKey="name" tick={{ fontSize: 12, fill: "#64748b" }} />
                   <YAxis tick={{ fontSize: 12, fill: "#64748b" }} />
                   <Tooltip cursor={{ fill: "#f8fafc" }} />
-                  <Bar dataKey="students" fill="#f59e0b" radius={[10, 10, 0, 0]} />
+                  <Bar dataKey="students" fill="#f59e0b" radius={[8, 8, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
           </Card>
 
-          <Card className="overflow-hidden rounded-[1.75rem] border-slate-200 bg-white shadow-sm xl:col-span-2">
+          <Card className="overflow-hidden rounded-2xl border-slate-200 bg-white text-slate-900 shadow-sm xl:col-span-2">
             <CardHeader title="Grade Distribution" subtitle="Based on computed student averages." />
 
-            <div className="h-80 p-5 pt-0">
+            <div className="h-72 p-5 pt-0">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
                     data={stats?.gradeDistribution ?? []}
                     dataKey="count"
                     nameKey="grade"
-                    outerRadius={96}
-                    innerRadius={52}
+                    outerRadius={78}
+                    innerRadius={44}
                     paddingAngle={4}
                     label
                   >

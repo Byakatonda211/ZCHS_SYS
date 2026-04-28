@@ -11,6 +11,16 @@ type Me = {
   role: Role | string;
 };
 
+type GradeCounts = {
+  A: number;
+  B: number;
+  C: number;
+  D: number;
+  E: number;
+  O?: number;
+  F?: number;
+};
+
 function round2(v: any) {
   const n = Number(v);
   if (!Number.isFinite(n)) return 0;
@@ -44,8 +54,15 @@ function gradeHint(mark: number, level: string) {
   if (n >= 70) return "B";
   if (n >= 60) return "C";
   if (n >= 50) return "D";
-  if (n >= 40) return "E";
-  return "F";
+  return "E";
+}
+
+function emptyGradeCounts(level: string): GradeCounts {
+  if (level === "A_LEVEL") {
+    return { A: 0, B: 0, C: 0, D: 0, E: 0, O: 0, F: 0 };
+  }
+
+  return { A: 0, B: 0, C: 0, D: 0, E: 0 };
 }
 
 async function getAllowedClassIds(user: Me) {
@@ -99,10 +116,7 @@ async function getSelectedBasics(req: Request, user: Me) {
     select: { id: true, name: true, level: true },
   });
 
-  const selectedClass =
-    classes.find((c) => c.id === requestedClassId) ||
-    classes[0] ||
-    null;
+  const selectedClass = classes.find((c) => c.id === requestedClassId) || classes[0] || null;
 
   const terms = selectedAcademicYear
     ? await prisma.term.findMany({
@@ -130,9 +144,7 @@ async function getSelectedBasics(req: Request, user: Me) {
     : [];
 
   const selectedAssessment =
-    assessments.find((a) => a.id === requestedAssessmentDefinitionId) ||
-    assessments[0] ||
-    null;
+    assessments.find((a) => a.id === requestedAssessmentDefinitionId) || assessments[0] || null;
 
   const selectedReportType =
     selectedClass && selectedAssessment
@@ -255,38 +267,50 @@ async function getMarksStatus(params: {
     },
   });
 
-  const enteredBySubject = new Map<string, Set<string>>();
+  /**
+   * Dashboard status is learner-subject completion, not raw component rows.
+   * For an EOT assessment with three components, a student still counts once.
+   * The slot is complete only when all selected assessment components are present.
+   */
+  const slotComponentMap = new Map<string, Set<string>>();
 
   for (const entry of entries) {
-    if (!enteredBySubject.has(entry.subjectId)) {
-      enteredBySubject.set(entry.subjectId, new Set());
+    const slotKey = [entry.enrollmentId, entry.subjectId, entry.subjectPaperId || "NO_PAPER"].join(":");
+
+    if (!slotComponentMap.has(slotKey)) {
+      slotComponentMap.set(slotKey, new Set());
     }
 
-    enteredBySubject
-      .get(entry.subjectId)!
-      .add(
-        [
-          entry.enrollmentId,
-          entry.subjectId,
-          entry.subjectPaperId || "NO_PAPER",
-          entry.componentId,
-        ].join(":")
-      );
+    slotComponentMap.get(slotKey)!.add(entry.componentId);
   }
 
   const marksStatus = Array.from(subjectMap.values())
     .map((subject) => {
       const expectedEntries =
-        subject.enrolledStudents *
-        componentIds.length *
-        (subject.level === "A_LEVEL" ? subject.papersCount : 1);
+        subject.enrolledStudents * (subject.level === "A_LEVEL" ? subject.papersCount : 1);
 
-      const enteredEntries = enteredBySubject.get(subject.subjectId)?.size || 0;
-      const completion =
-        expectedEntries > 0 ? round2((enteredEntries / expectedEntries) * 100) : 0;
+      let completeSlots = 0;
+      let partialSlots = 0;
+
+      for (const [slotKey, componentSet] of slotComponentMap.entries()) {
+        const [, subjectId] = slotKey.split(":");
+        if (subjectId !== subject.subjectId) continue;
+
+        if (componentSet.size >= componentIds.length) {
+          completeSlots += 1;
+        } else if (componentSet.size > 0) {
+          partialSlots += 1;
+        }
+      }
+
+      const completion = expectedEntries > 0 ? round2((completeSlots / expectedEntries) * 100) : 0;
 
       const status =
-        completion >= 100 ? "Complete" : completion > 0 ? "In Progress" : "Not Started";
+        completion >= 100
+          ? "Complete"
+          : completeSlots > 0 || partialSlots > 0
+            ? "In Progress"
+            : "Not Started";
 
       return {
         subjectId: subject.subjectId,
@@ -294,21 +318,21 @@ async function getMarksStatus(params: {
         subjectCode: subject.subjectCode,
         enrolledStudents: subject.enrolledStudents,
         expectedEntries,
-        enteredEntries,
+        enteredEntries: completeSlots,
+        partialEntries: partialSlots,
         completion,
-        missingEntries: Math.max(0, expectedEntries - enteredEntries),
+        missingEntries: Math.max(0, expectedEntries - completeSlots),
         status,
       };
     })
     .sort((a, b) => b.completion - a.completion || a.subjectName.localeCompare(b.subjectName));
 
   const totalExpected = marksStatus.reduce((sum, s) => sum + s.expectedEntries, 0);
-  const totalEntered = marksStatus.reduce((sum, s) => sum + s.enteredEntries, 0);
+  const totalComplete = marksStatus.reduce((sum, s) => sum + s.enteredEntries, 0);
 
   return {
     marksStatus,
-    overallMarksCompletion:
-      totalExpected > 0 ? round2((totalEntered / totalExpected) * 100) : 0,
+    overallMarksCompletion: totalExpected > 0 ? round2((totalComplete / totalExpected) * 100) : 0,
   };
 }
 
@@ -389,6 +413,7 @@ async function getPerformanceStats(params: {
   if (componentIds.length === 0) {
     return {
       bestStudents: [],
+      bottomStudents: [],
       bestSubjects: [],
       gradeDistribution: [],
     };
@@ -428,7 +453,6 @@ async function getPerformanceStats(params: {
     },
   });
 
-  const enrollmentById = new Map(enrollments.map((e) => [e.id, e]));
   const subjectNames = new Map<
     string,
     { subjectId: string; subjectName: string; subjectCode: string | null; level: string }
@@ -552,11 +576,24 @@ async function getPerformanceStats(params: {
     row.position = index + 1;
   });
 
+  const bestStudents = studentRows.slice(0, 10);
+  const bottomStudents = [...studentRows]
+    .sort((a, b) => a.average - b.average || a.name.localeCompare(b.name))
+    .slice(0, 10);
+
   const bestSubjects = Array.from(subjectTotals.entries())
     .map(([subjectId, scores]) => {
       const subject = subjectNames.get(subjectId);
-
+      const level = subject?.level || params.classLevel;
       const average = round2(scores.reduce((sum, score) => sum + score, 0) / scores.length);
+      const gradeCounts = emptyGradeCounts(level);
+
+      for (const score of scores) {
+        const grade = gradeHint(score, level) as keyof GradeCounts;
+        if (typeof gradeCounts[grade] === "number") {
+          gradeCounts[grade] = Number(gradeCounts[grade] || 0) + 1;
+        }
+      }
 
       return {
         subjectId,
@@ -564,7 +601,8 @@ async function getPerformanceStats(params: {
         subjectCode: subject?.subjectCode || null,
         average,
         studentsCounted: scores.length,
-        gradeHint: gradeHint(average, subject?.level || params.classLevel),
+        gradeHint: gradeHint(average, level),
+        gradeCounts,
       };
     })
     .sort((a, b) => b.average - a.average || a.subjectName.localeCompare(b.subjectName));
@@ -579,17 +617,15 @@ async function getPerformanceStats(params: {
   const gradeOrder =
     params.classLevel === "A_LEVEL"
       ? ["A", "B", "C", "D", "E", "O", "F"]
-      : ["A", "B", "C", "D", "E", "F"];
+      : ["A", "B", "C", "D", "E"];
 
   const gradeDistribution = gradeOrder
-    .map((grade) => ({
-      grade,
-      count: distributionMap.get(grade) || 0,
-    }))
+    .map((grade) => ({ grade, count: distributionMap.get(grade) || 0 }))
     .filter((row) => row.count > 0);
 
   return {
-    bestStudents: studentRows.slice(0, 20),
+    bestStudents,
+    bottomStudents,
     bestSubjects,
     gradeDistribution,
   };
@@ -664,59 +700,51 @@ export async function GET(req: Request) {
         },
         marksStatus: [],
         bestStudents: [],
+        bottomStudents: [],
         bestSubjects: [],
         classEnrollment: [],
         gradeDistribution: [],
       });
     }
 
-    const [
-      studentsCount,
-      teachersCount,
-      marksStatusResult,
-      performanceResult,
-      classEnrollment,
-    ] = await Promise.all([
-      prisma.student.count({ where: { isActive: true } }),
-      prisma.user.count({
-        where: {
-          isActive: true,
-          role: {
-            in: ["CLASS_TEACHER", "SUBJECT_TEACHER"],
+    const [studentsCount, teachersCount, marksStatusResult, performanceResult, classEnrollment] =
+      await Promise.all([
+        prisma.student.count({ where: { isActive: true } }),
+        prisma.user.count({
+          where: {
+            isActive: true,
+            role: { in: ["CLASS_TEACHER", "SUBJECT_TEACHER"] },
           },
-        },
-      }),
-      basics.selectedAssessment
-        ? getMarksStatus({
-            academicYearId: basics.selectedAcademicYear.id,
-            termId: basics.selectedTerm.id,
-            classId: basics.selectedClass.id,
-            assessmentDefinitionId: basics.selectedAssessment.id,
-          })
-        : Promise.resolve({
-            marksStatus: [],
-            overallMarksCompletion: 0,
-          }),
-      basics.selectedAssessment
-        ? getPerformanceStats({
-            academicYearId: basics.selectedAcademicYear.id,
-            termId: basics.selectedTerm.id,
-            classId: basics.selectedClass.id,
-            classLevel: basics.selectedClass.level,
-            reportType: basics.selectedReportType,
-            selectedAssessmentDefinitionId: basics.selectedAssessment.id,
-          })
-        : Promise.resolve({
-            bestStudents: [],
-            bestSubjects: [],
-            gradeDistribution: [],
-          }),
-      getClassEnrollment({
-        academicYearId: basics.selectedAcademicYear.id,
-        allowedClassIds: basics.allowedClassIds,
-        user,
-      }),
-    ]);
+        }),
+        basics.selectedAssessment
+          ? getMarksStatus({
+              academicYearId: basics.selectedAcademicYear.id,
+              termId: basics.selectedTerm.id,
+              classId: basics.selectedClass.id,
+              assessmentDefinitionId: basics.selectedAssessment.id,
+            })
+          : Promise.resolve({ marksStatus: [], overallMarksCompletion: 0 }),
+        basics.selectedAssessment
+          ? getPerformanceStats({
+              academicYearId: basics.selectedAcademicYear.id,
+              termId: basics.selectedTerm.id,
+              classId: basics.selectedClass.id,
+              classLevel: basics.selectedClass.level,
+              reportType: basics.selectedReportType,
+              selectedAssessmentDefinitionId: basics.selectedAssessment.id,
+            })
+          : Promise.resolve({
+              bestStudents: [],
+              bottomStudents: [],
+              bestSubjects: [],
+              gradeDistribution: [],
+            }),
+        getClassEnrollment({
+          academicYearId: basics.selectedAcademicYear.id,
+          allowedClassIds: basics.allowedClassIds,
+          user,
+        }),
+      ]);
 
     return NextResponse.json({
       me: user,
@@ -746,6 +774,7 @@ export async function GET(req: Request) {
       },
       marksStatus: marksStatusResult.marksStatus,
       bestStudents: performanceResult.bestStudents,
+      bottomStudents: performanceResult.bottomStudents,
       bestSubjects: performanceResult.bestSubjects,
       classEnrollment,
       gradeDistribution: performanceResult.gradeDistribution,
