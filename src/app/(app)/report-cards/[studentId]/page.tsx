@@ -7,7 +7,7 @@ import { Button, Card, CardHeader, Badge } from "@/components/ui";
 import { getRemarkOverride, pickRemark } from "@/lib/store";
 import type { ReportType } from "@/lib/store";
 
-const SCHOOL_NAME = "Zana Christian High School";
+const SCHOOL_NAME = "ZANA CHRISTIAN HIGH SCHOOL";
 const SCHOOL_MOTTO = "IN GOD, WE TRUST";
 const SCHOOL_ADDRESS = "P.O. Box 21312, Kampala, Uganda";
 const SCHOOL_CONTACT = "Tel: 0773 748 168 / 0704 590 234";
@@ -20,13 +20,21 @@ const REPORT_BADGE_URL =
 const HEADTEACHER_SIGNATURE_URL =
   process.env.NEXT_PUBLIC_HEADTEACHER_SIGNATURE_URL ||
   "/report-assets/headteacher-signature.jpg";
+const DEFAULT_STUDENT_PROFILE_URL =
+  process.env.NEXT_PUBLIC_REPORT_STUDENT_PROFILE_URL ||
+  "/report-assets/student-profile.png";
 
 type StudentApiRow = {
   id: string;
   firstName: string;
+  otherNames?: string | null;
   lastName: string;
   admissionNo?: string | null;
   studentNo?: string | null;
+  profilePictureUrl?: string | null;
+  photoUrl?: string | null;
+  imageUrl?: string | null;
+  passportPhotoUrl?: string | null;
   enrollments?: Array<{
     id: string;
     isActive?: boolean;
@@ -241,10 +249,40 @@ function safeFileName(name: string) {
   return name.replace(/[<>:"/\\|?*\x00-\x1F]/g, "").replace(/\s+/g, " ").trim();
 }
 
+function getFullStudentName(student: StudentApiRow | null) {
+  if (!student) return "";
+  return [student.firstName, student.otherNames, student.lastName]
+    .map((part) => String(part || "").trim())
+    .filter(Boolean)
+    .join(" ");
+}
+
+function getStudentProfileImageUrl(student: StudentApiRow | null) {
+  if (!student) return DEFAULT_STUDENT_PROFILE_URL;
+  return (
+    student.profilePictureUrl ||
+    student.photoUrl ||
+    student.imageUrl ||
+    student.passportPhotoUrl ||
+    DEFAULT_STUDENT_PROFILE_URL
+  );
+}
+
 function formatMark(value: number | null) {
   if (value === null || Number.isNaN(value)) return "—";
   const s = value.toFixed(2);
   return s.replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
+}
+
+function formatPdfMark(value: number | null, reportType: string) {
+  if (value === null || Number.isNaN(value)) return "—";
+
+  // PDF-only: end-of-term report cards should show marks rounded to 0 decimal places.
+  if (reportType === "O_EOT" || reportType === "A_EOT") {
+    return String(Math.round(Number(value)));
+  }
+
+  return formatMark(value);
 }
 
 function extractTermNumber(termName: string, fallback = "1") {
@@ -282,6 +320,15 @@ function toShortAssessmentLabel(label: string, index: number) {
   if (clean.includes("FINAL")) return "EXAM";
 
   return `CA ${index + 1}`;
+}
+
+function toPdfShortAssessmentLabel(label: string, index: number, reportType: string) {
+  // PDF-only: EOT has CA 1, CA 2, then EXAM — never CA 3.
+  if ((reportType === "O_EOT" || reportType === "A_EOT") && index === 2) {
+    return "EXAM";
+  }
+
+  return toShortAssessmentLabel(label, index);
 }
 
 function reportTypeLabel(reportType: string) {
@@ -803,7 +850,7 @@ export default function StudentReportCardPage() {
     };
   }, [studentId, yearId, termId, reportType, isALevelReport]);
 
-  const fullName = student ? `${student.firstName} ${student.lastName}` : "";
+  const fullName = getFullStudentName(student);
   const studentNo = student?.admissionNo || student?.studentNo || "No admission number";
   const className = activeEnrollment?.class?.name || "—";
   const reportHeading = getReportHeading(reportType, termName || termId, academicYearName || yearId);
@@ -839,9 +886,12 @@ export default function StudentReportCardPage() {
     try {
       setDownloading(true);
 
-      const [badgeImage, signatureImage] = await Promise.all([
+      const studentProfileImageUrl = getStudentProfileImageUrl(student);
+
+      const [badgeImage, signatureImage, profileImage] = await Promise.all([
         loadPdfImage(REPORT_BADGE_URL, "badge"),
         loadPdfImage(HEADTEACHER_SIGNATURE_URL, "signature"),
+        loadPdfImage(studentProfileImageUrl, "profile"),
       ]);
 
       const pdf = new jsPDF({
@@ -874,14 +924,20 @@ export default function StudentReportCardPage() {
       const loosenFactor = tightPdf ? 0 : compactPdf ? 0.04 : 0.12;
 
       const COLORS = {
-        border: [203, 213, 225] as [number, number, number],
-        slateFill: [248, 250, 252] as [number, number, number],
-        primaryDark: [79, 70, 229] as [number, number, number],
-        primarySoft: [224, 231, 255] as [number, number, number],
-        secondaryDark: [13, 148, 136] as [number, number, number],
-        secondarySoft: [204, 251, 241] as [number, number, number],
-        accentDark: [217, 119, 6] as [number, number, number],
-        accentSoft: [254, 243, 199] as [number, number, number],
+        // PDF-only palette. Sizes and layout are unchanged; only colour values change.
+        bodyText: [30, 41, 59] as [number, number, number],
+        headerText: [17, 50, 83] as [number, number, number],
+        mutedText: [71, 85, 105] as [number, number, number],
+        border: [176, 190, 205] as [number, number, number],
+        slateFill: [250, 252, 247] as [number, number, number],
+        headerFill: [255, 253, 247] as [number, number, number],
+        imageBoxFill: [246, 249, 244] as [number, number, number],
+        primaryDark: [25, 77, 112] as [number, number, number],
+        primarySoft: [225, 240, 249] as [number, number, number],
+        secondaryDark: [28, 116, 88] as [number, number, number],
+        secondarySoft: [224, 243, 234] as [number, number, number],
+        accentDark: [178, 82, 49] as [number, number, number],
+        accentSoft: [255, 240, 224] as [number, number, number],
       };
 
       const drawText = (
@@ -897,10 +953,10 @@ export default function StudentReportCardPage() {
       ) => {
         pdf.setFont("helvetica", opts?.style || "normal");
         pdf.setFontSize(opts?.size || 10);
-        const color = opts?.color || [15, 23, 42];
+        const color = opts?.color || COLORS.bodyText;
         pdf.setTextColor(color[0], color[1], color[2]);
         pdf.text(text, x, yy, { align: opts?.align || "left" });
-        pdf.setTextColor(15, 23, 42);
+        pdf.setTextColor(COLORS.bodyText[0], COLORS.bodyText[1], COLORS.bodyText[2]);
       };
 
       const drawBox = (
@@ -911,12 +967,23 @@ export default function StudentReportCardPage() {
         fillRgb?: [number, number, number],
         radius = 1.2
       ) => {
+        const squareCorners = radius <= 0;
+
         if (fillRgb) {
           pdf.setFillColor(fillRgb[0], fillRgb[1], fillRgb[2]);
-          pdf.roundedRect(x, yy, w, h, radius, radius, "F");
+          if (squareCorners) {
+            pdf.rect(x, yy, w, h, "F");
+          } else {
+            pdf.roundedRect(x, yy, w, h, radius, radius, "F");
+          }
         }
+
         pdf.setDrawColor(COLORS.border[0], COLORS.border[1], COLORS.border[2]);
-        pdf.roundedRect(x, yy, w, h, radius, radius);
+        if (squareCorners) {
+          pdf.rect(x, yy, w, h);
+        } else {
+          pdf.roundedRect(x, yy, w, h, radius, radius);
+        }
       };
 
       const estimateCellHeight = (
@@ -966,7 +1033,7 @@ export default function StudentReportCardPage() {
         pdf.setFont("helvetica", opts?.bold ? "bold" : "normal");
         pdf.setFontSize(fontSize);
 
-        const textColor = opts?.textColor || [15, 23, 42];
+        const textColor = opts?.textColor || COLORS.bodyText;
         pdf.setTextColor(textColor[0], textColor[1], textColor[2]);
 
         const align = opts?.align || "left";
@@ -986,7 +1053,7 @@ export default function StudentReportCardPage() {
           pdf.text(line, tx, startY + idx * lineHeight, { align });
         });
 
-        pdf.setTextColor(15, 23, 42);
+        pdf.setTextColor(COLORS.bodyText[0], COLORS.bodyText[1], COLORS.bodyText[2]);
       };
 
       const drawImageFit = (
@@ -1030,38 +1097,52 @@ export default function StudentReportCardPage() {
       const headerBandH = tightPdf ? 5.0 : compactPdf ? 5.5 : 6.5;
 
       const outerPad = tightPdf ? 1.4 : 1.6;
-      const badgeSlotW = badgeImage ? (tightPdf ? 38 : compactPdf ? 41 : 45) : 0;
-      const badgeBoxW = badgeImage ? badgeSlotW - 1.0 : 0;
-      const badgeBoxH = badgeImage ? headerH - 3.2 : 0;
-      const badgeGap = badgeImage ? 2.8 : 0;
+      const sideSlotW = tightPdf ? 35 : compactPdf ? 39 : 43;
+      const sideBoxW = sideSlotW - 1.2;
+      const sideBoxH = headerH - 3.2;
+      const sideBoxY = y + 1.2;
 
-      drawBox(left, y, usableWidth, headerH, [255, 255, 255], 2.2);
+      drawBox(left, y, usableWidth, headerH, COLORS.headerFill, 2.2);
 
       if (badgeImage) {
         const badgeBoxX = left + outerPad;
-        const badgeBoxY = y + 1.2;
-        drawBox(badgeBoxX, badgeBoxY, badgeBoxW, badgeBoxH, [248, 250, 252], 1.8);
+        drawBox(badgeBoxX, sideBoxY, sideBoxW, sideBoxH, COLORS.imageBoxFill, 1.2);
         drawImageFit(
           badgeImage,
           badgeBoxX + 0.3,
-          badgeBoxY + 0.3,
-          badgeBoxW - 0.6,
-          badgeBoxH - 0.6
+          sideBoxY + 0.3,
+          sideBoxW - 0.6,
+          sideBoxH - 0.6
         );
       }
 
-      const contentLeft = left + (badgeImage ? badgeSlotW + badgeGap : 0);
-      const contentWidth = usableWidth - (badgeImage ? badgeSlotW + badgeGap : 0);
-      const contentCenterX = contentLeft + contentWidth / 2;
+      if (profileImage) {
+        const profileBoxX = left + usableWidth - outerPad - sideBoxW;
+        drawBox(profileBoxX, sideBoxY, sideBoxW, sideBoxH, COLORS.imageBoxFill, 1.2);
+        drawImageFit(
+          profileImage,
+          profileBoxX + 0.3,
+          sideBoxY + 0.3,
+          sideBoxW - 0.6,
+          sideBoxH - 0.6
+        );
+      }
+
+      const contentLeft = left + sideSlotW + (tightPdf ? 2 : 3);
+      const contentRight = left + usableWidth - sideSlotW - (tightPdf ? 2 : 3);
+      const contentWidth = contentRight - contentLeft;
+      const contentCenterX = left + usableWidth / 2;
 
       drawText(SCHOOL_NAME, contentCenterX, y + (tightPdf ? 6.1 : compactPdf ? 6.9 : 7.8), {
         size: tightPdf ? 14 : compactPdf ? 15.2 : 16.8,
         style: "bold",
         align: "center",
+        color: COLORS.headerText,
       });
       drawText(SCHOOL_MOTTO, contentCenterX, y + (tightPdf ? 9.9 : compactPdf ? 10.9 : 12.5), {
         size: tightPdf ? 7.6 : compactPdf ? 8.2 : 9.0,
         align: "center",
+        color: COLORS.secondaryDark,
       });
       drawText(
         `${SCHOOL_ADDRESS} • ${SCHOOL_CONTACT}`,
@@ -1070,6 +1151,7 @@ export default function StudentReportCardPage() {
         {
           size: tightPdf ? 6.7 : compactPdf ? 7.2 : 8.0,
           align: "center",
+          color: COLORS.mutedText,
         }
       );
 
@@ -1125,7 +1207,7 @@ export default function StudentReportCardPage() {
         const labelWidth = pdf.getTextWidth(labelText);
         pdf.setFont("helvetica", "normal");
         pdf.setFontSize(tightPdf ? 6.8 : compactPdf ? 7.1 : 7.7);
-        pdf.setTextColor(15, 23, 42);
+        pdf.setTextColor(COLORS.bodyText[0], COLORS.bodyText[1], COLORS.bodyText[2]);
         pdf.text(String(value || "—"), x + 2 + labelWidth + 1.2, yy + h / 2 + 1.1);
       };
 
@@ -1143,7 +1225,7 @@ export default function StudentReportCardPage() {
       y += tightPdf ? 8.8 : compactPdf ? 9.8 : 11.2;
 
       const summaryBandH = tightPdf ? 5.4 : compactPdf ? 5.8 : 6.9;
-      drawBox(left, y, usableWidth, summaryBandH, COLORS.secondaryDark, 1.4);
+      drawBox(left, y, usableWidth, summaryBandH, COLORS.secondaryDark, 0);
       drawText("SUMMARY RESULTS", left + 2, y + (tightPdf ? 3.85 : compactPdf ? 4.15 : 4.95), {
         size: tightPdf ? 7.2 : compactPdf ? 7.7 : 8.7,
         style: "bold",
@@ -1213,7 +1295,7 @@ export default function StudentReportCardPage() {
 
       y += summaryHeadH;
 
-      drawCell(formatMark(overallAverage), left, y, s1, summaryRowH, {
+      drawCell(formatPdfMark(overallAverage, reportType), left, y, s1, summaryRowH, {
         align: "center",
         bold: true,
         size: tightPdf ? 6.1 : compactPdf ? 6.5 : 7.7,
@@ -1236,7 +1318,7 @@ export default function StudentReportCardPage() {
       }
 
       drawCell(
-        bestRow ? `${formatMark(bestRow.total)} (${bestRow.subjectName})` : "—",
+        bestRow ? `${formatPdfMark(bestRow.total, reportType)} (${bestRow.subjectName})` : "—",
         left + s1 + s2 + (isSummaryWithPoints ? s3 : 0),
         y,
         s4,
@@ -1249,7 +1331,7 @@ export default function StudentReportCardPage() {
         }
       );
       drawCell(
-        lowestRow ? `${formatMark(lowestRow.total)} (${lowestRow.subjectName})` : "—",
+        lowestRow ? `${formatPdfMark(lowestRow.total, reportType)} (${lowestRow.subjectName})` : "—",
         left + s1 + s2 + (isSummaryWithPoints ? s3 : 0) + s4,
         y,
         s5,
@@ -1265,7 +1347,7 @@ export default function StudentReportCardPage() {
       y += tightPdf ? 7.1 : compactPdf ? 7.9 : 10.0;
 
       const subjectBandH = tightPdf ? 5.4 : compactPdf ? 5.8 : 6.9;
-      drawBox(left, y, usableWidth, subjectBandH, COLORS.primaryDark, 1.4);
+      drawBox(left, y, usableWidth, subjectBandH, COLORS.primaryDark, 0);
       drawText(
         "SUBJECT ACHIEVEMENT LEVEL",
         left + 2,
@@ -1370,7 +1452,12 @@ export default function StudentReportCardPage() {
         commentW +
         initialsW;
 
-      const tableLeft = left + (usableWidth - tableWidth) / 2;
+      // Keep the Subject Achievement Level table exactly aligned with the other PDF tables.
+      // Any tiny width difference is absorbed into the comment column instead of centering
+      // a slightly wider/narrower table.
+      const tableLeft = left;
+      const tableWidthDelta = usableWidth - tableWidth;
+      commentW += tableWidthDelta;
 
       let x = tableLeft;
       const subjectHeadH = tightPdf ? 6.4 : compactPdf ? 7.0 : 8.6;
@@ -1397,8 +1484,9 @@ export default function StudentReportCardPage() {
       for (let i = 0; i < scheme.components.length; i++) {
         const component = scheme.components[i];
         drawCell(
-          `${toShortAssessmentLabel(component.label, i)}\n(Out of ${formatMark(
-            component.weightOutOf
+          `${toPdfShortAssessmentLabel(component.label, i, reportType)}\n(Out of ${formatPdfMark(
+            component.weightOutOf,
+            reportType
           )})`,
           x,
           y,
@@ -1516,7 +1604,7 @@ export default function StudentReportCardPage() {
                 (c) => c.assessmentId === component.assessmentId
               );
               drawCell(
-                formatMark(item?.weightedScore ?? null),
+                formatPdfMark(item?.weightedScore ?? null, reportType),
                 rowX,
                 rowY,
                 componentW,
@@ -1531,7 +1619,7 @@ export default function StudentReportCardPage() {
             }
 
             if (i === 0) {
-              drawCell(formatMark(row.total), rowX, y, totalW, subjectHeightNeeded, {
+              drawCell(formatPdfMark(row.total, reportType), rowX, y, totalW, subjectHeightNeeded, {
                 align: "center",
                 bold: true,
                 size: tightPdf ? 6.0 : compactPdf ? 6.3 : 7.3,
@@ -1608,7 +1696,7 @@ export default function StudentReportCardPage() {
 
         for (const component of scheme.components) {
           const item = row.componentScores.find((c) => c.assessmentId === component.assessmentId);
-          drawCell(formatMark(item?.weightedScore ?? null), x, y, componentW, rowHeight, {
+          drawCell(formatPdfMark(item?.weightedScore ?? null, reportType), x, y, componentW, rowHeight, {
             align: "center",
             size: tightPdf ? 5.9 : compactPdf ? 6.2 : 7.2,
             valign: "middle",
@@ -1616,7 +1704,7 @@ export default function StudentReportCardPage() {
           x += componentW;
         }
 
-        drawCell(formatMark(row.total), x, y, totalW, rowHeight, {
+        drawCell(formatPdfMark(row.total, reportType), x, y, totalW, rowHeight, {
           align: "center",
           bold: true,
           size: tightPdf ? 5.9 : compactPdf ? 6.2 : 7.2,
@@ -1652,69 +1740,101 @@ export default function StudentReportCardPage() {
       y += tightPdf ? 1.8 : compactPdf ? 2.4 : 3.8;
 
       const headCommentText = headTeacherComment || "—";
-      const remainingHeight = Math.max(pageBottom - y, 28);
+
+      // PDF-only bottom block sizing.
+      // Keep the descriptor rows readable, but dynamically compress the bottom block when
+      // many subjects have already consumed most of the page. This prevents the Head
+      // Teacher's comment from being drawn below the visible page area.
+      const remainingHeight = Math.max(pageBottom - y, 18);
 
       const base = {
-        blockTitleH: tightPdf ? 4.9 : compactPdf ? 5.4 : 6.5,
-        gdHeaderH: tightPdf ? 4.9 : compactPdf ? 5.4 : 6.2,
-        gdRowH: tightPdf ? 5.0 : compactPdf ? 5.6 : 6.8,
-        betweenBlocks: tightPdf ? 1.9 : compactPdf ? 2.2 : 2.8,
-        commentMinH: tightPdf ? 6.4 : compactPdf ? 7.2 : 8.8,
-        afterCommentGap: tightPdf ? 2.0 : compactPdf ? 2.3 : 3.2,
-        signatureH: signatureImage ? (tightPdf ? 8.7 : compactPdf ? 9.8 : 12.0) : 5.8,
-        labelFont: tightPdf ? 6.0 : compactPdf ? 6.4 : 7.4,
+        blockTitleH: tightPdf ? 4.8 : compactPdf ? 5.3 : 6.4,
+        gdHeaderH: tightPdf ? 5.2 : compactPdf ? 5.8 : 6.7,
+        gdRowH: tightPdf ? 6.5 : compactPdf ? 7.2 : 8.6,
+        titleTableGap: tightPdf ? 0.7 : compactPdf ? 0.8 : 1.0,
+        betweenBlocks: tightPdf ? 1.5 : compactPdf ? 1.8 : 2.4,
+        commentMinH: tightPdf ? 7.8 : compactPdf ? 8.8 : 10.6,
+        afterCommentGap: tightPdf ? 1.1 : compactPdf ? 1.4 : 2.1,
+        signatureH: signatureImage ? (tightPdf ? 7.2 : compactPdf ? 8.3 : 10.0) : 4.8,
+        labelFont: tightPdf ? 5.8 : compactPdf ? 6.2 : 7.1,
       };
+
+      const desiredCommentFont = tightPdf ? 6.3 : compactPdf ? 6.8 : 7.8;
+      const desiredGdFont = tightPdf ? 9 : compactPdf ? 9 : 9;
+      const desiredGdDescriptorFont = tightPdf ? 9 : compactPdf ? 9 : 9;
+      const desiredGdLineHeight = tightPdf ? 2.8 : compactPdf ? 3.05 : 3.4;
 
       const baseCommentContentH = Math.max(
         base.commentMinH,
         estimateCellHeight(
           headCommentText,
           usableWidth,
-          tightPdf ? 5.2 : compactPdf ? 5.6 : 6.6,
-          tightPdf ? 2.4 : 2.7,
+          desiredCommentFont,
+          tightPdf ? 2.9 : compactPdf ? 3.1 : 3.45,
           4
         )
       );
 
       const baseBottomNeeded =
         base.blockTitleH +
+        base.titleTableGap +
         base.gdHeaderH +
         gradeDescriptors.length * base.gdRowH +
         base.betweenBlocks +
         base.blockTitleH +
+        base.titleTableGap +
         baseCommentContentH +
         base.afterCommentGap +
         base.signatureH;
 
       let bottomScale = 1;
       if (baseBottomNeeded > remainingHeight) {
-        bottomScale = Math.max(0.72, remainingHeight / baseBottomNeeded);
+        // Use the exact available-height ratio so the whole bottom block remains visible.
+        // The lower bound only protects against impossible overflow; in such cases, we
+        // still compress as much as needed instead of spilling onto a second page.
+        bottomScale = Math.max(0.42, remainingHeight / baseBottomNeeded);
       }
 
       const sc = (n: number) => Math.max(0.1, round2(n * bottomScale) || n * bottomScale);
+      const veryTightBottom = bottomScale < 0.78;
 
       const bottomTitleH = sc(base.blockTitleH);
-      const gdHeaderH = sc(base.gdHeaderH);
-      const gdRowH = sc(base.gdRowH);
+      const gdHeaderH = veryTightBottom
+        ? sc(base.gdHeaderH)
+        : Math.max(sc(base.gdHeaderH), tightPdf ? 4.7 : compactPdf ? 5.1 : 5.7);
+      const gdRowH = veryTightBottom
+        ? sc(base.gdRowH)
+        : Math.max(sc(base.gdRowH), tightPdf ? 5.2 : compactPdf ? 5.6 : 6.4);
+      const titleTableGap = sc(base.titleTableGap);
       const betweenBlocks = sc(base.betweenBlocks);
-      const commentFont = Math.max(4.8, sc(tightPdf ? 5.2 : compactPdf ? 5.6 : 6.6));
-      const gdFont = Math.max(4.8, sc(tightPdf ? 5.0 : compactPdf ? 5.4 : 6.4));
+      const commentFont = veryTightBottom
+        ? Math.max(5.2, sc(desiredCommentFont))
+        : Math.max(tightPdf ? 5.8 : compactPdf ? 6.2 : 7.0, sc(desiredCommentFont));
+      const gdFont = veryTightBottom
+        ? Math.max(4.8, sc(desiredGdFont))
+        : Math.max(tightPdf ? 5.3 : compactPdf ? 5.7 : 6.3, sc(desiredGdFont));
+      const gdDescriptorFont = veryTightBottom
+        ? Math.max(4.6, sc(desiredGdDescriptorFont))
+        : Math.max(tightPdf ? 5.0 : compactPdf ? 5.4 : 6.0, sc(desiredGdDescriptorFont));
+      const gdLineHeight = veryTightBottom
+        ? Math.max(2.05, sc(desiredGdLineHeight))
+        : Math.max(tightPdf ? 2.25 : compactPdf ? 2.45 : 2.75, sc(desiredGdLineHeight));
       const commentContentH = Math.max(sc(base.commentMinH), sc(baseCommentContentH));
       const afterCommentGap = sc(base.afterCommentGap);
-      const sigLabelFont = Math.max(5.0, sc(base.labelFont));
+      const sigLabelFont = Math.max(4.8, sc(base.labelFont));
 
       const gd1 = tightPdf ? 12 : compactPdf ? 13 : 16;
       const gd2 = tightPdf ? 25 : compactPdf ? 28 : 36;
       const gd3 = tightPdf ? 18 : compactPdf ? 20 : 25;
       const gd4 = usableWidth - (gd1 + gd2 + gd3);
 
-      drawBox(left, y, usableWidth, bottomTitleH, COLORS.accentDark, 1.2);
+      drawBox(left, y, usableWidth, bottomTitleH, COLORS.accentDark, 0);
       drawText("GRADE DESCRIPTOR TABLE", left + 2, y + bottomTitleH - 1.2, {
         size: Math.max(5.8, sc(tightPdf ? 6.8 : compactPdf ? 7.2 : 8.0)),
         style: "bold",
         color: [255, 255, 255],
       });
-      y += bottomTitleH;
+      y += bottomTitleH + titleTableGap;
 
       drawCell("Grade", left, y, gd1, gdHeaderH, {
         bold: true,
@@ -1750,43 +1870,43 @@ export default function StudentReportCardPage() {
           valign: "middle",
         });
         drawCell(g.achievementLevel, left + gd1, y, gd2, gdRowH, {
-          size: Math.max(4.7, gdFont - 0.2),
+          size: gdFont,
           valign: "middle",
         });
         drawCell(
-          `${formatMark(g.minMark)} - ${formatMark(g.maxMark)}`,
+          `${formatPdfMark(g.minMark, reportType)} - ${formatPdfMark(g.maxMark, reportType)}`,
           left + gd1 + gd2,
           y,
           gd3,
           gdRowH,
           {
             align: "center",
-            size: Math.max(4.7, gdFont - 0.2),
+            size: gdFont,
             valign: "middle",
           }
         );
         drawCell(g.descriptor, left + gd1 + gd2 + gd3, y, gd4, gdRowH, {
-          size: Math.max(4.5, gdFont - 0.5),
+          size: gdDescriptorFont,
           valign: "middle",
-          lineHeight: Math.max(2.0, sc(2.5)),
+          lineHeight: gdLineHeight,
         });
         y += gdRowH;
       }
 
       y += betweenBlocks;
 
-      drawBox(left, y, usableWidth, bottomTitleH, COLORS.primaryDark, 1.2);
+      drawBox(left, y, usableWidth, bottomTitleH, COLORS.primaryDark, 0);
       drawText("HEAD TEACHER'S COMMENT", left + 2, y + bottomTitleH - 1.2, {
         size: Math.max(5.8, sc(tightPdf ? 6.8 : compactPdf ? 7.2 : 8.0)),
         style: "bold",
         color: [255, 255, 255],
       });
-      y += bottomTitleH;
+      y += bottomTitleH + titleTableGap;
 
       drawCell(headCommentText, left, y, usableWidth, commentContentH, {
         size: commentFont,
         valign: "middle",
-        lineHeight: Math.max(2.0, sc(2.5)),
+        lineHeight: Math.max(2.4, sc(tightPdf ? 2.8 : compactPdf ? 3.0 : 3.3)),
       });
       y += commentContentH + afterCommentGap;
 
@@ -1797,12 +1917,12 @@ export default function StudentReportCardPage() {
       const headSigX = classSigX + sigColW + sigGap;
 
       if (signatureImage) {
-        const sigMaxW = Math.max(20, sc(tightPdf ? 35 : compactPdf ? 39 : 45));
-        const sigMaxH = Math.max(6, sc(tightPdf ? 7.5 : compactPdf ? 8.5 : 10.5));
+        const sigMaxW = Math.max(39, sc(tightPdf ? 69 : compactPdf ? 78 : 90));
+        const sigMaxH = Math.max(12.75, sc(tightPdf ? 15.75 : compactPdf ? 18.0 : 21.75));
         drawImageFit(
           signatureImage,
-          headSigX + 11,
-          signatureY - sigMaxH + 10,
+          headSigX + 1,
+          signatureY - sigMaxH + 7.5,
           sigMaxW,
           sigMaxH
         );
@@ -1817,7 +1937,7 @@ export default function StudentReportCardPage() {
         color: COLORS.primaryDark,
       });
 
-      pdf.setDrawColor(148, 163, 184);
+      pdf.setDrawColor(COLORS.border[0], COLORS.border[1], COLORS.border[2]);
       pdf.line(classSigX + 32, signatureY + 0.9, classSigX + sigColW, signatureY + 0.9);
 
       pdf.save(`${safeFileName(fullName)} Report Card.pdf`);
