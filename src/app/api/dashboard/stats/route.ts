@@ -171,15 +171,22 @@ async function getMarksStatus(params: {
   classId: string;
   assessmentDefinitionId: string;
 }) {
-  const components = await prisma.assessmentComponent.findMany({
+  /**
+   * Keep this aligned with the marks entry API.
+   * The current marks entry route reads/writes marks against ONLY the first
+   * AssessmentComponent under the selected AssessmentDefinition.
+   *
+   * If the dashboard checks all components for an EOT assessment, it can show
+   * empty/incomplete status even when marks were already entered. Therefore,
+   * the dashboard status uses the same first component as marks entry.
+   */
+  const component = await prisma.assessmentComponent.findFirst({
     where: { definitionId: params.assessmentDefinitionId },
     orderBy: [{ order: "asc" }, { createdAt: "asc" }],
     select: { id: true },
   });
 
-  const componentIds = components.map((c) => c.id);
-
-  if (componentIds.length === 0) {
+  if (!component) {
     return {
       marksStatus: [],
       overallMarksCompletion: 0,
@@ -252,7 +259,7 @@ async function getMarksStatus(params: {
     where: {
       academicYearId: params.academicYearId,
       termId: params.termId,
-      componentId: { in: componentIds },
+      componentId: component.id,
       enrollment: {
         academicYearId: params.academicYearId,
         classId: params.classId,
@@ -268,20 +275,22 @@ async function getMarksStatus(params: {
   });
 
   /**
-   * Dashboard status is learner-subject completion, not raw component rows.
-   * For an EOT assessment with three components, a student still counts once.
-   * The slot is complete only when all selected assessment components are present.
+   * Count one completed dashboard entry per learner + subject + paper.
+   * This avoids the wrong denominator of students × assessment components.
+   *
+   * O-Level expected entries: enrolled learners in the subject.
+   * A-Level expected entries: enrolled learners in the subject × active papers.
    */
-  const slotComponentMap = new Map<string, Set<string>>();
+  const enteredSlots = new Map<string, Set<string>>();
 
   for (const entry of entries) {
-    const slotKey = [entry.enrollmentId, entry.subjectId, entry.subjectPaperId || "NO_PAPER"].join(":");
-
-    if (!slotComponentMap.has(slotKey)) {
-      slotComponentMap.set(slotKey, new Set());
+    if (!enteredSlots.has(entry.subjectId)) {
+      enteredSlots.set(entry.subjectId, new Set());
     }
 
-    slotComponentMap.get(slotKey)!.add(entry.componentId);
+    enteredSlots
+      .get(entry.subjectId)!
+      .add([entry.enrollmentId, entry.subjectId, entry.subjectPaperId || "NO_PAPER"].join(":"));
   }
 
   const marksStatus = Array.from(subjectMap.values())
@@ -289,28 +298,11 @@ async function getMarksStatus(params: {
       const expectedEntries =
         subject.enrolledStudents * (subject.level === "A_LEVEL" ? subject.papersCount : 1);
 
-      let completeSlots = 0;
-      let partialSlots = 0;
-
-      for (const [slotKey, componentSet] of slotComponentMap.entries()) {
-        const [, subjectId] = slotKey.split(":");
-        if (subjectId !== subject.subjectId) continue;
-
-        if (componentSet.size >= componentIds.length) {
-          completeSlots += 1;
-        } else if (componentSet.size > 0) {
-          partialSlots += 1;
-        }
-      }
-
-      const completion = expectedEntries > 0 ? round2((completeSlots / expectedEntries) * 100) : 0;
+      const enteredEntries = enteredSlots.get(subject.subjectId)?.size || 0;
+      const completion = expectedEntries > 0 ? round2((enteredEntries / expectedEntries) * 100) : 0;
 
       const status =
-        completion >= 100
-          ? "Complete"
-          : completeSlots > 0 || partialSlots > 0
-            ? "In Progress"
-            : "Not Started";
+        completion >= 100 ? "Complete" : completion > 0 ? "In Progress" : "Not Started";
 
       return {
         subjectId: subject.subjectId,
@@ -318,21 +310,21 @@ async function getMarksStatus(params: {
         subjectCode: subject.subjectCode,
         enrolledStudents: subject.enrolledStudents,
         expectedEntries,
-        enteredEntries: completeSlots,
-        partialEntries: partialSlots,
+        enteredEntries,
+        partialEntries: 0,
         completion,
-        missingEntries: Math.max(0, expectedEntries - completeSlots),
+        missingEntries: Math.max(0, expectedEntries - enteredEntries),
         status,
       };
     })
     .sort((a, b) => b.completion - a.completion || a.subjectName.localeCompare(b.subjectName));
 
   const totalExpected = marksStatus.reduce((sum, s) => sum + s.expectedEntries, 0);
-  const totalComplete = marksStatus.reduce((sum, s) => sum + s.enteredEntries, 0);
+  const totalEntered = marksStatus.reduce((sum, s) => sum + s.enteredEntries, 0);
 
   return {
     marksStatus,
-    overallMarksCompletion: totalExpected > 0 ? round2((totalComplete / totalExpected) * 100) : 0,
+    overallMarksCompletion: totalExpected > 0 ? round2((totalEntered / totalExpected) * 100) : 0,
   };
 }
 
