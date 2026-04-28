@@ -19,7 +19,7 @@ const REPORT_BADGE_URL =
   process.env.NEXT_PUBLIC_REPORT_BADGE_URL || "/report-assets/badge.png";
 const HEADTEACHER_SIGNATURE_URL =
   process.env.NEXT_PUBLIC_HEADTEACHER_SIGNATURE_URL ||
-  "/report-assets/headteacher-signature.jpg";
+  "/report-assets/headteacher-signature.png";
 const DEFAULT_STUDENT_PROFILE_URL =
   process.env.NEXT_PUBLIC_REPORT_STUDENT_PROFILE_URL ||
   "/report-assets/student-profile.png";
@@ -212,17 +212,33 @@ function isTemporarySubsidiarySubject(subjectName: string) {
   const n = normalizeSubjectName(subjectName);
   return (
     n === "GENERAL PAPER" ||
+    n === "GP" ||
     n === "SUBSIDIARY MATHEMATICS" ||
-    n === "INFORMATION AND COMMUNICATION TECHNOLOGY"
+    n === "SUBSIDIARY MATH" ||
+    n === "SUB MATH" ||
+    n === "SUB MATHS" ||
+    n === "INFORMATION AND COMMUNICATION TECHNOLOGY" ||
+    n === "ICT"
   );
+}
+
+function gradeALevelSubject(subjectName: string, score: number | null, descriptors: GradeDescriptorRow[]) {
+  if (score === null) return "—";
+
+  // A-Level subsidiary subjects only carry either 1 point or 0 points.
+  // Therefore they should display only O or F, not A/B/C/D/E.
+  if (isTemporarySubsidiarySubject(subjectName)) {
+    return Number(score) >= 50 ? "O" : "F";
+  }
+
+  return gradeScore(score, descriptors);
 }
 
 function getALevelPoints(subjectName: string, grade: string) {
   const g = String(grade || "").trim().toUpperCase();
 
   if (isTemporarySubsidiarySubject(subjectName)) {
-    if (["A", "B", "C", "D", "E", "O"].includes(g)) return 1;
-    return 0;
+    return g === "O" ? 1 : 0;
   }
 
   switch (g) {
@@ -274,12 +290,22 @@ function formatMark(value: number | null) {
   return s.replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
 }
 
+function roundHalfUpToWhole(value: number | null) {
+  if (value === null || Number.isNaN(Number(value))) return null;
+
+  // Some totals come from weighted averages, so exact .5 values can arrive as
+  // 59.499999999 or 77.499999999. This keeps normal rounding behaviour but
+  // prevents those display-only floating-point cases from rounding down.
+  return Math.round(Number(value) + 1e-6);
+}
+
 function formatPdfMark(value: number | null, reportType: string) {
   if (value === null || Number.isNaN(value)) return "—";
 
   // PDF-only: end-of-term report cards should show marks rounded to 0 decimal places.
   if (reportType === "O_EOT" || reportType === "A_EOT") {
-    return String(Math.round(Number(value)));
+    const rounded = roundHalfUpToWhole(value);
+    return rounded === null ? "—" : String(rounded);
   }
 
   return formatMark(value);
@@ -323,8 +349,15 @@ function toShortAssessmentLabel(label: string, index: number) {
 }
 
 function toPdfShortAssessmentLabel(label: string, index: number, reportType: string) {
-  // PDF-only: EOT has CA 1, CA 2, then EXAM — never CA 3.
-  if ((reportType === "O_EOT" || reportType === "A_EOT") && index === 2) {
+  // PDF-only: A-Level EOT should show MOT and EOT instead of CA 1 and CA 2.
+  if (reportType === "A_EOT") {
+    if (index === 0) return "MOT";
+    if (index === 1) return "EOT";
+    if (index === 2) return "EXAM";
+  }
+
+  // PDF-only: O-Level EOT has CA 1, CA 2, then EXAM — never CA 3.
+  if (reportType === "O_EOT" && index === 2) {
     return "EXAM";
   }
 
@@ -346,10 +379,15 @@ function reportTypeLabel(reportType: string) {
   }
 }
 
-function averageNumbers(values: Array<number | null | undefined>) {
+function averageRawNumbers(values: Array<number | null | undefined>) {
   const nums = values.filter((x): x is number => typeof x === "number" && Number.isFinite(x));
   if (nums.length === 0) return null;
-  return round2(nums.reduce((sum, v) => sum + v, 0) / nums.length);
+  return nums.reduce((sum, v) => sum + v, 0) / nums.length;
+}
+
+function averageNumbers(values: Array<number | null | undefined>) {
+  const rawAverage = averageRawNumbers(values);
+  return rawAverage === null ? null : round2(rawAverage);
 }
 
 function sumNumbers(values: Array<number | null | undefined>) {
@@ -394,6 +432,26 @@ async function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
+async function getDataUrlImageSize(dataUrl: string): Promise<{ width: number; height: number }> {
+  return await new Promise((resolve, reject) => {
+    const img = new window.Image();
+    img.onload = () => resolve({ width: img.width || 1, height: img.height || 1 });
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+}
+
+function isPngImage(blob: Blob, dataUrl: string, url: string) {
+  const mime = String(blob.type || "").toLowerCase();
+  const cleanUrl = String(url || "").split("?")[0].toLowerCase();
+
+  return (
+    mime.includes("png") ||
+    dataUrl.startsWith("data:image/png") ||
+    cleanUrl.endsWith(".png")
+  );
+}
+
 async function blobToCompressedJpegData(
   blob: Blob,
   quality = 0.72
@@ -413,6 +471,8 @@ async function blobToCompressedJpegData(
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("Canvas context unavailable");
 
+    // JPEG is used only for non-transparent images. It has no alpha channel,
+    // so we intentionally flatten those images onto white for smaller PDFs.
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
@@ -439,18 +499,15 @@ async function loadPdfImage(url: string, alias: string): Promise<LoadedPdfImage 
     if (!res.ok) return null;
 
     const blob = await res.blob();
+    const originalDataUrl = await blobToDataUrl(blob);
 
-    if (alias === "badge") {
-      const dataUrl = await blobToDataUrl(blob);
-      const size = await new Promise<{ width: number; height: number }>((resolve, reject) => {
-        const img = new window.Image();
-        img.onload = () => resolve({ width: img.width || 1, height: img.height || 1 });
-        img.onerror = reject;
-        img.src = dataUrl;
-      });
+    // Preserve transparent PNGs. Do not pass them through canvas.toDataURL("image/jpeg"),
+    // because JPEG removes transparency and turns transparent areas white.
+    if (isPngImage(blob, originalDataUrl, absoluteUrl)) {
+      const size = await getDataUrlImageSize(originalDataUrl);
 
       return {
-        dataUrl,
+        dataUrl: originalDataUrl,
         format: "PNG",
         width: size.width,
         height: size.height,
@@ -729,8 +786,21 @@ export default function StudentReportCardPage() {
                 })
               );
 
-              const subjectTotal = averageNumbers(paperRows.map((p) => p.total));
-              const subjectGrade = gradeScore(
+              // For A-Level end-of-term reports, the subject total should match the
+              // visible paper totals on the report. Therefore, round each paper total first,
+              // then average those rounded paper totals, and finally round the average.
+              const subjectTotalRaw =
+                reportType === "A_EOT"
+                  ? averageRawNumbers(paperRows.map((p) => roundHalfUpToWhole(p.total)))
+                  : averageRawNumbers(paperRows.map((p) => p.total));
+              const subjectTotal =
+                reportType === "A_EOT"
+                  ? roundHalfUpToWhole(subjectTotalRaw)
+                  : subjectTotalRaw === null
+                  ? null
+                  : round2(subjectTotalRaw);
+              const subjectGrade = gradeALevelSubject(
+                subject.subjectName,
                 subjectTotal,
                 loadedScheme.gradeDescriptors || DEFAULT_O_LEVEL_DESCRIPTORS
               );
@@ -763,7 +833,13 @@ export default function StudentReportCardPage() {
             subjectName: subject.subjectName,
             componentScores,
             total,
-            grade: gradeScore(total, loadedScheme.gradeDescriptors || DEFAULT_O_LEVEL_DESCRIPTORS),
+            grade: isALevelReport
+              ? gradeALevelSubject(
+                  subject.subjectName,
+                  total,
+                  loadedScheme.gradeDescriptors || DEFAULT_O_LEVEL_DESCRIPTORS
+                )
+              : gradeScore(total, loadedScheme.gradeDescriptors || DEFAULT_O_LEVEL_DESCRIPTORS),
             teacherInitials: teacherMap[subject.subjectId] || "—",
             papers: [],
             isPaperBased: false,
@@ -1106,7 +1182,14 @@ export default function StudentReportCardPage() {
 
       if (badgeImage) {
         const badgeBoxX = left + outerPad;
-        drawBox(badgeBoxX, sideBoxY, sideBoxW, sideBoxH, COLORS.imageBoxFill, 1.2);
+        drawBox(
+          badgeBoxX,
+          sideBoxY,
+          sideBoxW,
+          sideBoxH,
+          badgeImage.format === "PNG" ? undefined : COLORS.imageBoxFill,
+          1.2
+        );
         drawImageFit(
           badgeImage,
           badgeBoxX + 0.3,
@@ -1118,7 +1201,14 @@ export default function StudentReportCardPage() {
 
       if (profileImage) {
         const profileBoxX = left + usableWidth - outerPad - sideBoxW;
-        drawBox(profileBoxX, sideBoxY, sideBoxW, sideBoxH, COLORS.imageBoxFill, 1.2);
+        drawBox(
+          profileBoxX,
+          sideBoxY,
+          sideBoxW,
+          sideBoxH,
+          profileImage.format === "PNG" ? undefined : COLORS.imageBoxFill,
+          1.2
+        );
         drawImageFit(
           profileImage,
           profileBoxX + 0.3,
