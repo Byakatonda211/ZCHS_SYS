@@ -59,6 +59,7 @@ export async function GET(req: Request) {
             id: true,
             subjectId: true,
             name: true,
+            code: true,
             order: true,
           },
         },

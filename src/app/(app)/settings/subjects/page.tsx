@@ -9,6 +9,7 @@ type SubjectPaper = {
   id: string;
   subjectId: string;
   name: string;
+  code?: string | null;
   order: number;
 };
 
@@ -84,6 +85,11 @@ export default function SubjectsPage() {
   const [paperName, setPaperName] = React.useState<Record<string, string>>({});
   const [paperCount, setPaperCount] = React.useState<Record<string, number>>({});
 
+  const [editingPaperId, setEditingPaperId] = React.useState<string | null>(null);
+  const [editPaperName, setEditPaperName] = React.useState('');
+  const [editPaperCode, setEditPaperCode] = React.useState('');
+  const [editPaperOrder, setEditPaperOrder] = React.useState<number>(1);
+
   async function refresh() {
     setErr('');
     setLoading(true);
@@ -114,6 +120,21 @@ export default function SubjectsPage() {
     setEditName('');
     setEditCode('');
     setEditIsCompulsory(false);
+  }
+
+  function startPaperEdit(paper: SubjectPaper) {
+    setEditingPaperId(paper.id);
+    setEditPaperName(paper.name || '');
+    setEditPaperCode(paper.code || '');
+    setEditPaperOrder(paper.order || 1);
+    setErr('');
+  }
+
+  function cancelPaperEdit() {
+    setEditingPaperId(null);
+    setEditPaperName('');
+    setEditPaperCode('');
+    setEditPaperOrder(1);
   }
 
   async function addSubject() {
@@ -186,7 +207,9 @@ export default function SubjectsPage() {
     try {
       const name = (paperName[subjectId] || '').trim();
       if (!name) throw new Error('Enter paper name (e.g. Paper 1)');
+
       await apiPost(`/api/settings/subjects/${subjectId}/papers`, { name });
+
       setPaperName((p) => ({ ...p, [subjectId]: '' }));
       await refresh();
     } catch (e: any) {
@@ -210,13 +233,55 @@ export default function SubjectsPage() {
     }
   }
 
+  async function savePaperEdit(subjectId: string, paperId: string) {
+    setErr('');
+    setBusy(true);
+    try {
+      const name = editPaperName.trim();
+      if (!name) throw new Error('Paper name is required');
+
+      await apiPatch(`/api/settings/subjects/${subjectId}/papers/${paperId}`, {
+        name,
+        code: editPaperCode.trim() || null,
+        order: Math.max(1, Math.floor(Number(editPaperOrder || 1))),
+      });
+
+      cancelPaperEdit();
+      await refresh();
+    } catch (e: any) {
+      setErr(e?.message || 'Failed to update paper');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deletePaper(subjectId: string, paperId: string, paperNameValue: string) {
+    const ok = window.confirm(
+      `Delete paper "${paperNameValue}"?\n\nExisting marks will not be deleted, but this paper will no longer appear as an active paper.`
+    );
+
+    if (!ok) return;
+
+    setErr('');
+    setBusy(true);
+    try {
+      await apiDelete(`/api/settings/subjects/${subjectId}/papers/${paperId}`);
+      if (editingPaperId === paperId) cancelPaperEdit();
+      await refresh();
+    } catch (e: any) {
+      setErr(e?.message || 'Failed to delete paper');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">Subjects</h1>
           <p className="mt-1 text-sm text-slate-600">
-            O-Level subjects are single rows. A-Level subjects can have papers (Paper 1/2/3) under the same subject.
+            O-Level subjects are single rows. A-Level subjects can have papers under the same subject.
           </p>
         </div>
 
@@ -228,6 +293,7 @@ export default function SubjectsPage() {
             onChange={(e) => {
               setLevel(e.target.value as Level);
               cancelEdit();
+              cancelPaperEdit();
             }}
           >
             <option value="O_LEVEL">O-Level (S1–S4)</option>
@@ -242,15 +308,18 @@ export default function SubjectsPage() {
 
       <Card className="p-6">
         <div className="text-sm font-semibold text-slate-900">Add Subject</div>
+
         <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-4">
           <div className="md:col-span-2">
             <Label>Name</Label>
             <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Mathematics" />
           </div>
+
           <div className="md:col-span-1">
             <Label>Code (optional)</Label>
             <Input value={newCode} onChange={(e) => setNewCode(e.target.value)} placeholder="MTC" />
           </div>
+
           <div className="md:col-span-1 flex items-end">
             <Button className="w-full" onClick={addSubject} disabled={busy}>
               Add
@@ -279,8 +348,11 @@ export default function SubjectsPage() {
         <div className="flex items-center justify-between">
           <div>
             <div className="text-sm font-semibold text-slate-900">Existing Subjects</div>
-            <div className="text-xs text-slate-500">{level === 'A_LEVEL' ? 'Includes papers.' : 'No papers needed.'}</div>
+            <div className="text-xs text-slate-500">
+              {level === 'A_LEVEL' ? 'Includes paper management.' : 'No papers needed.'}
+            </div>
           </div>
+
           <Button variant="secondary" onClick={refresh} disabled={loading || busy}>
             Refresh
           </Button>
@@ -305,10 +377,12 @@ export default function SubjectsPage() {
                             <Label>Name</Label>
                             <Input value={editName} onChange={(e) => setEditName(e.target.value)} />
                           </div>
+
                           <div>
                             <Label>Code (optional)</Label>
                             <Input value={editCode} onChange={(e) => setEditCode(e.target.value)} />
                           </div>
+
                           {level === 'O_LEVEL' ? (
                             <div className="md:col-span-2">
                               <label className="flex items-center gap-2 text-sm text-slate-700">
@@ -326,9 +400,13 @@ export default function SubjectsPage() {
                       ) : (
                         <div className="flex flex-wrap items-center gap-2">
                           <div className="text-sm font-semibold text-slate-900">{s.name}</div>
+
                           {s.code ? (
-                            <span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-700">{s.code}</span>
+                            <span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-700">
+                              {s.code}
+                            </span>
                           ) : null}
+
                           {level === 'O_LEVEL' && s.isCompulsory ? (
                             <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
                               Compulsory
@@ -366,19 +444,126 @@ export default function SubjectsPage() {
                   </div>
 
                   {level === 'A_LEVEL' ? (
-                    <div className="mt-3">
-                      <div className="text-xs font-semibold text-slate-700">Papers</div>
+                    <div className="mt-4 rounded-2xl bg-slate-50 p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-wide text-slate-700">
+                            Papers
+                          </div>
+                          <div className="text-xs text-slate-500">
+                            Edit, reorder, or remove papers under this subject.
+                          </div>
+                        </div>
+
+                        {s.papers?.length ? (
+                          <span className="rounded-full bg-white px-2 py-1 text-xs text-slate-600">
+                            {s.papers.length} paper{s.papers.length === 1 ? '' : 's'}
+                          </span>
+                        ) : null}
+                      </div>
 
                       {s.papers && s.papers.length ? (
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          {s.papers.map((p) => (
-                            <span key={p.id} className="rounded-full border border-slate-200 bg-white px-2 py-1 text-xs">
-                              {p.name}
-                            </span>
-                          ))}
+                        <div className="mt-3 space-y-2">
+                          {s.papers.map((p) => {
+                            const isPaperEditing = editingPaperId === p.id;
+
+                            return (
+                              <div
+                                key={p.id}
+                                className="rounded-xl border border-slate-200 bg-white p-3"
+                              >
+                                {isPaperEditing ? (
+                                  <div className="grid grid-cols-1 gap-2 md:grid-cols-12">
+                                    <div className="md:col-span-5">
+                                      <Label>Paper name</Label>
+                                      <Input
+                                        value={editPaperName}
+                                        onChange={(e) => setEditPaperName(e.target.value)}
+                                        placeholder="Paper 1"
+                                      />
+                                    </div>
+
+                                    <div className="md:col-span-3">
+                                      <Label>Code</Label>
+                                      <Input
+                                        value={editPaperCode}
+                                        onChange={(e) => setEditPaperCode(e.target.value)}
+                                        placeholder="P1"
+                                      />
+                                    </div>
+
+                                    <div className="md:col-span-2">
+                                      <Label>Order</Label>
+                                      <Input
+                                        value={String(editPaperOrder)}
+                                        onChange={(e) => setEditPaperOrder(Number(e.target.value))}
+                                        inputMode="numeric"
+                                      />
+                                    </div>
+
+                                    <div className="flex items-end gap-2 md:col-span-2">
+                                      <Button
+                                        className="flex-1"
+                                        variant="secondary"
+                                        onClick={() => savePaperEdit(s.id, p.id)}
+                                        disabled={busy}
+                                      >
+                                        Save
+                                      </Button>
+
+                                      <Button
+                                        className="flex-1"
+                                        variant="secondary"
+                                        onClick={cancelPaperEdit}
+                                        disabled={busy}
+                                      >
+                                        Cancel
+                                      </Button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="flex flex-wrap items-center justify-between gap-3">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <span className="rounded-full border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-800">
+                                        {p.name}
+                                      </span>
+
+                                      {p.code ? (
+                                        <span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-700">
+                                          {p.code}
+                                        </span>
+                                      ) : null}
+
+                                      <span className="text-xs text-slate-500">Order: {p.order}</span>
+                                    </div>
+
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <Button
+                                        variant="secondary"
+                                        onClick={() => startPaperEdit(p)}
+                                        disabled={busy}
+                                      >
+                                        Edit Paper
+                                      </Button>
+
+                                      <Button
+                                        variant="secondary"
+                                        onClick={() => deletePaper(s.id, p.id, p.name)}
+                                        disabled={busy}
+                                      >
+                                        Delete Paper
+                                      </Button>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                       ) : (
-                        <div className="mt-2 text-sm text-slate-500">No papers yet.</div>
+                        <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-white p-3 text-sm text-slate-500">
+                          No papers yet.
+                        </div>
                       )}
 
                       <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
@@ -389,6 +574,7 @@ export default function SubjectsPage() {
                             placeholder="Add paper (e.g. Paper 1)"
                           />
                         </div>
+
                         <div className="sm:col-span-1">
                           <Button className="w-full" variant="secondary" onClick={() => addPaper(s.id)} disabled={busy}>
                             Add Paper
@@ -405,10 +591,12 @@ export default function SubjectsPage() {
                             inputMode="numeric"
                           />
                         </div>
+
                         <Button variant="secondary" onClick={() => autoGenerate(s.id)} disabled={busy}>
                           Auto-generate
                         </Button>
-                        <span className="text-xs text-slate-500">Creates Paper 1..N (up to 6).</span>
+
+                        <span className="text-xs text-slate-500">Creates Paper 1..N, up to 6.</span>
                       </div>
                     </div>
                   ) : null}

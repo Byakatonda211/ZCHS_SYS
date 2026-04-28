@@ -105,6 +105,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
             id: true,
             subjectId: true,
             name: true,
+            code: true,
             order: true,
           },
         },
