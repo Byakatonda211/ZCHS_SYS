@@ -328,11 +328,77 @@ async function getMarksStatus(params: {
   };
 }
 
-async function getSchemeComponentWeights(params: {
+type SchemeComponentConfig = {
+  assessmentDefinitionId: string;
+  componentId: string;
+  weightOutOf: number;
+  enterOutOf: number;
+};
+
+type GradeDescriptor = {
+  grade: string;
+  minScore: number;
+  maxScore: number;
+};
+
+function gradeFromDescriptors(mark: number, descriptors: GradeDescriptor[], level: string) {
+  const n = Number(mark);
+  if (!Number.isFinite(n)) return "-";
+
+  const found = descriptors.find((d) => n >= d.minScore && n <= d.maxScore);
+  if (found?.grade) return found.grade;
+
+  return gradeHint(n, level);
+}
+
+async function getGradeDescriptors(reportType: string, level: string): Promise<GradeDescriptor[]> {
+  const p: any = prisma as any;
+
+  const candidates = [
+    p.gradeDescriptor,
+    p.reportGradeDescriptor,
+    p.reportGradeRule,
+    p.gradeRule,
+  ].filter(Boolean);
+
+  for (const model of candidates) {
+    try {
+      const rows = await model.findMany({
+        where: {
+          OR: [
+            { reportType },
+            { level },
+            { reportType, level },
+          ],
+          isActive: true,
+        },
+        orderBy: [{ minScore: "desc" }],
+      });
+
+      if (Array.isArray(rows) && rows.length) {
+        return rows
+          .map((r: any) => ({
+            grade: String(r.grade || r.label || "").trim(),
+            minScore: Number(r.minScore ?? r.min ?? 0),
+            maxScore: Number(r.maxScore ?? r.max ?? 100),
+          }))
+          .filter((r: GradeDescriptor) => r.grade && Number.isFinite(r.minScore) && Number.isFinite(r.maxScore));
+      }
+    } catch {
+      // Ignore optional grading tables that may not exist in some deployments.
+    }
+  }
+
+  return [];
+}
+
+async function getSchemeComponentConfigs(params: {
   reportType: string;
   selectedAssessmentDefinitionId: string;
 }) {
   const p: any = prisma as any;
+
+  const configs: SchemeComponentConfig[] = [];
 
   const scheme = await p.reportScheme.findUnique({
     where: { reportType: params.reportType },
@@ -342,10 +408,12 @@ async function getSchemeComponentWeights(params: {
         select: {
           assessmentDefinitionId: true,
           weightOutOf: true,
+          enterOutOf: true,
           assessment: {
             select: {
               components: {
                 orderBy: [{ order: "asc" }, { createdAt: "asc" }],
+                take: 1,
                 select: { id: true },
               },
             },
@@ -355,36 +423,38 @@ async function getSchemeComponentWeights(params: {
     },
   });
 
-  const componentWeights = new Map<string, number>();
-
   if (scheme?.components?.length) {
     for (const schemeComponent of scheme.components) {
-      const ids = schemeComponent.assessment?.components?.map((c: any) => c.id) || [];
-      if (ids.length === 0) continue;
+      const componentId = schemeComponent.assessment?.components?.[0]?.id;
+      if (!componentId) continue;
 
-      const perComponentWeight = Number(schemeComponent.weightOutOf || 0) / ids.length;
-
-      for (const id of ids) {
-        componentWeights.set(id, perComponentWeight);
-      }
+      configs.push({
+        assessmentDefinitionId: schemeComponent.assessmentDefinitionId,
+        componentId,
+        weightOutOf: Number(schemeComponent.weightOutOf ?? 0),
+        enterOutOf: Number(schemeComponent.enterOutOf ?? 100) || 100,
+      });
     }
   }
 
-  if (componentWeights.size === 0) {
-    const fallbackComponents = await prisma.assessmentComponent.findMany({
+  if (configs.length === 0) {
+    const component = await prisma.assessmentComponent.findFirst({
       where: { definitionId: params.selectedAssessmentDefinitionId },
       orderBy: [{ order: "asc" }, { createdAt: "asc" }],
       select: { id: true },
     });
 
-    const weight = fallbackComponents.length > 0 ? 100 / fallbackComponents.length : 100;
-
-    for (const component of fallbackComponents) {
-      componentWeights.set(component.id, weight);
+    if (component) {
+      configs.push({
+        assessmentDefinitionId: params.selectedAssessmentDefinitionId,
+        componentId: component.id,
+        weightOutOf: 100,
+        enterOutOf: 100,
+      });
     }
   }
 
-  return componentWeights;
+  return configs;
 }
 
 async function getPerformanceStats(params: {
@@ -395,12 +465,15 @@ async function getPerformanceStats(params: {
   reportType: string;
   selectedAssessmentDefinitionId: string;
 }) {
-  const componentWeights = await getSchemeComponentWeights({
+  const schemeConfigs = await getSchemeComponentConfigs({
     reportType: params.reportType,
     selectedAssessmentDefinitionId: params.selectedAssessmentDefinitionId,
   });
 
-  const componentIds = Array.from(componentWeights.keys());
+  const componentConfigById = new Map(schemeConfigs.map((c) => [c.componentId, c]));
+  const componentIds = schemeConfigs.map((c) => c.componentId);
+  const totalSchemeWeight = schemeConfigs.reduce((sum, c) => sum + Number(c.weightOutOf || 0), 0) || 100;
+  const gradeDescriptors = await getGradeDescriptors(params.reportType, params.classLevel);
 
   if (componentIds.length === 0) {
     return {
@@ -485,20 +558,29 @@ async function getPerformanceStats(params: {
     },
   });
 
-  const grouped = new Map<string, Map<string, Map<string, number[]>>>();
+  /**
+   * Match report-card calculation more closely:
+   * 1) Marks are entered out of the configured enterOutOf, not always out of 100.
+   * 2) Each report scheme component contributes weightOutOf.
+   * 3) A-Level paper rows are first calculated per paper, then averaged into the subject.
+   * 4) Student average is the average of final subject scores.
+   */
+  const grouped = new Map<string, Map<string, Map<string, Map<string, number[]>>>>();
 
   for (const entry of entries) {
     if (!grouped.has(entry.studentId)) grouped.set(entry.studentId, new Map());
 
     const studentMap = grouped.get(entry.studentId)!;
-
     if (!studentMap.has(entry.subjectId)) studentMap.set(entry.subjectId, new Map());
 
     const subjectMap = studentMap.get(entry.subjectId)!;
+    const paperKey = entry.subjectPaperId || "NO_PAPER";
+    if (!subjectMap.has(paperKey)) subjectMap.set(paperKey, new Map());
 
-    if (!subjectMap.has(entry.componentId)) subjectMap.set(entry.componentId, []);
+    const paperMap = subjectMap.get(paperKey)!;
+    if (!paperMap.has(entry.componentId)) paperMap.set(entry.componentId, []);
 
-    subjectMap.get(entry.componentId)!.push(Number(entry.scoreRaw));
+    paperMap.get(entry.componentId)!.push(Number(entry.scoreRaw));
   }
 
   const studentRows: {
@@ -512,29 +594,48 @@ async function getPerformanceStats(params: {
 
   const subjectTotals = new Map<string, number[]>();
 
+  function computePaperScore(componentMap: Map<string, number[]>) {
+    let total = 0;
+    let usedWeight = 0;
+
+    for (const [componentId, scores] of componentMap.entries()) {
+      const config = componentConfigById.get(componentId);
+      if (!config || !scores.length) continue;
+
+      const rawAvg = scores.reduce((sum, s) => sum + Number(s || 0), 0) / scores.length;
+      const enterOutOf = Number(config.enterOutOf || 100) || 100;
+      const weight = Number(config.weightOutOf || 0);
+
+      total += (rawAvg / enterOutOf) * weight;
+      usedWeight += weight;
+    }
+
+    if (usedWeight <= 0) return null;
+
+    // Convert to a 100-scale subject/paper score so it matches report averages.
+    return round2((total / totalSchemeWeight) * 100);
+  }
+
   for (const enrollment of enrollments) {
     const studentMap = grouped.get(enrollment.studentId);
     if (!studentMap) continue;
 
     const subjectScores: number[] = [];
 
-    for (const [subjectId, componentMap] of studentMap.entries()) {
-      let total = 0;
-      let hasAny = false;
+    for (const [subjectId, paperMap] of studentMap.entries()) {
+      const paperScores: number[] = [];
 
-      for (const [componentId, scores] of componentMap.entries()) {
-        const weight = componentWeights.get(componentId) ?? 0;
-        if (!scores.length || weight <= 0) continue;
-
-        const avgRaw = scores.reduce((sum, s) => sum + Number(s || 0), 0) / scores.length;
-
-        total += (avgRaw / 100) * weight;
-        hasAny = true;
+      for (const [, componentMap] of paperMap.entries()) {
+        const paperScore = computePaperScore(componentMap);
+        if (paperScore !== null) paperScores.push(paperScore);
       }
 
-      if (!hasAny) continue;
+      if (paperScores.length === 0) continue;
 
-      const subjectTotal = round2(total);
+      const subjectTotal = round2(
+        paperScores.reduce((sum, score) => sum + score, 0) / paperScores.length
+      );
+
       subjectScores.push(subjectTotal);
 
       if (!subjectTotals.has(subjectId)) subjectTotals.set(subjectId, []);
@@ -577,11 +678,12 @@ async function getPerformanceStats(params: {
     .map(([subjectId, scores]) => {
       const subject = subjectNames.get(subjectId);
       const level = subject?.level || params.classLevel;
+      const descriptors = level === params.classLevel ? gradeDescriptors : [];
       const average = round2(scores.reduce((sum, score) => sum + score, 0) / scores.length);
       const gradeCounts = emptyGradeCounts(level);
 
       for (const score of scores) {
-        const grade = gradeHint(score, level) as keyof GradeCounts;
+        const grade = gradeFromDescriptors(score, descriptors, level) as keyof GradeCounts;
         if (typeof gradeCounts[grade] === "number") {
           gradeCounts[grade] = Number(gradeCounts[grade] || 0) + 1;
         }
@@ -593,7 +695,7 @@ async function getPerformanceStats(params: {
         subjectCode: subject?.subjectCode || null,
         average,
         studentsCounted: scores.length,
-        gradeHint: gradeHint(average, level),
+        gradeHint: gradeFromDescriptors(average, descriptors, level),
         gradeCounts,
       };
     })
@@ -602,7 +704,7 @@ async function getPerformanceStats(params: {
   const distributionMap = new Map<string, number>();
 
   for (const student of studentRows) {
-    const grade = gradeHint(student.average, params.classLevel);
+    const grade = gradeFromDescriptors(student.average, gradeDescriptors, params.classLevel);
     distributionMap.set(grade, (distributionMap.get(grade) || 0) + 1);
   }
 
