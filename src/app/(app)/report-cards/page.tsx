@@ -394,10 +394,17 @@ function gradeScore(score: number | null, descriptors: GradeDescriptorRow[]) {
     (a, b) => Number(a.minMark) - Number(b.minMark)
   );
 
-  const epsilon = 0.01;
-  const found = sorted.find(
+  // Borderline rule: if a mark sits exactly on a shared boundary,
+  // award the higher grade. Example: if 40-50 = E and 50-60 = D,
+  // a mark of 50 should become D, not E.
+  const epsilon = 0.000001;
+  const matches = sorted.filter(
     (d) => n + epsilon >= Number(d.minMark) && n - epsilon <= Number(d.maxMark)
   );
+
+  const found = matches.sort(
+    (a, b) => Number(b.minMark) - Number(a.minMark)
+  )[0];
 
   if (found?.grade) return found.grade;
 
@@ -1016,6 +1023,7 @@ function renderStudentReportPage(
   } = payload;
 
   const isALevelReport = reportType === "A_MID" || reportType === "A_EOT";
+  const isOLevelReport = reportType === "O_MID" || reportType === "O_EOT";
   const fullName = [student.firstName, student.otherNames, student.lastName]
     .map((x) => String(x || "").trim())
     .filter(Boolean)
@@ -1343,7 +1351,7 @@ function renderStudentReportPage(
   y += headerH + (tightPdf ? 1.8 : compactPdf ? 2.2 : 2.5);
 
   const infoGap = 2;
-  const infoH = tightPdf ? 7.4 : compactPdf ? 8.0 : 8.8;
+  const infoH = isOLevelReport ? 10.8 : tightPdf ? 7.9 : compactPdf ? 8.5 : 9.4;
   const nameW = tightPdf ? 95 : compactPdf ? 98 : 100;
   const numberW = tightPdf ? 51 : compactPdf ? 53 : 55;
   const classW = usableWidth - nameW - numberW - infoGap * 2;
@@ -1358,7 +1366,7 @@ function renderStudentReportPage(
   ) => {
     drawBox(x, yy, w, h, [255, 255, 255], 1.4);
     pdf.setFont("helvetica", "bold");
-    pdf.setFontSize(tightPdf ? 6.8 : compactPdf ? 7.1 : 7.7);
+    pdf.setFontSize(isOLevelReport ? 9.6 : tightPdf ? 7.2 : compactPdf ? 7.6 : 8.4);
     pdf.setTextColor(
       COLORS.primaryDark[0],
       COLORS.primaryDark[1],
@@ -1369,7 +1377,7 @@ function renderStudentReportPage(
 
     const labelWidth = pdf.getTextWidth(labelText);
     pdf.setFont("helvetica", "normal");
-    pdf.setFontSize(tightPdf ? 6.8 : compactPdf ? 7.1 : 7.7);
+    pdf.setFontSize(isOLevelReport ? 9.6 : tightPdf ? 7.2 : compactPdf ? 7.6 : 8.4);
     pdf.setTextColor(COLORS.bodyText[0], COLORS.bodyText[1], COLORS.bodyText[2]);
     pdf.text(String(value || "—"), x + 2 + labelWidth + 1.2, yy + h / 2 + 1.1);
   };
@@ -1385,12 +1393,12 @@ function renderStudentReportPage(
     className
   );
 
-  y += tightPdf ? 8.8 : compactPdf ? 9.8 : 11.2;
+  y += isOLevelReport ? 12.6 : tightPdf ? 8.8 : compactPdf ? 9.8 : 11.2;
 
   const summaryBandH = tightPdf ? 5.4 : compactPdf ? 5.8 : 6.9;
   drawBox(left, y, usableWidth, summaryBandH, COLORS.secondaryDark, 0);
   drawText("SUMMARY RESULTS", left + 2, y + (tightPdf ? 3.85 : compactPdf ? 4.15 : 4.95), {
-    size: tightPdf ? 7.2 : compactPdf ? 7.7 : 8.7,
+    size: tightPdf ? 7.2 : compactPdf ? 11.2 : 8.7,
     style: "bold",
     color: [255, 255, 255],
   });
@@ -1404,20 +1412,20 @@ function renderStudentReportPage(
   const s4 = isSummaryWithPoints ? 51.8 : 56.3;
   const s5 = isSummaryWithPoints ? 51.8 : 56.3;
 
-  const summaryHeadH = tightPdf ? 6.2 : compactPdf ? 6.8 : 7.9;
-  const summaryRowH = tightPdf ? 6.4 : compactPdf ? 7.0 : 8.4;
+  const summaryHeadH = isOLevelReport ? 9.8 : tightPdf ? 6.2 : compactPdf ? 6.8 : 7.9;
+  const summaryRowH = isOLevelReport ? 13.0 : tightPdf ? 6.4 : compactPdf ? 7.0 : 8.4;
 
   drawCell("Overall Average", left, y, s1, summaryHeadH, {
     bold: true,
     fill: true,
     fillColor: COLORS.secondarySoft,
-    size: tightPdf ? 6.0 : compactPdf ? 6.4 : 7.4,
+    size: isOLevelReport ? 8.8 : tightPdf ? 6.0 : compactPdf ? 6.4 : 7.4,
   });
   drawCell("Final Grade", left + s1, y, s2, summaryHeadH, {
     bold: true,
     fill: true,
     fillColor: COLORS.secondarySoft,
-    size: tightPdf ? 6.0 : compactPdf ? 6.4 : 7.4,
+    size: isOLevelReport ? 8.8 : tightPdf ? 6.0 : compactPdf ? 6.4 : 7.4,
   });
 
   if (isSummaryWithPoints) {
@@ -1425,7 +1433,7 @@ function renderStudentReportPage(
       bold: true,
       fill: true,
       fillColor: COLORS.secondarySoft,
-      size: tightPdf ? 6.0 : compactPdf ? 6.4 : 7.4,
+      size: isOLevelReport ? 8.8 : tightPdf ? 6.0 : compactPdf ? 6.4 : 7.4,
     });
   }
 
@@ -1439,7 +1447,7 @@ function renderStudentReportPage(
       bold: true,
       fill: true,
       fillColor: COLORS.secondarySoft,
-      size: tightPdf ? 6.0 : compactPdf ? 6.4 : 7.4,
+      size: isOLevelReport ? 8.8 : tightPdf ? 6.0 : compactPdf ? 6.4 : 7.4,
     }
   );
   drawCell(
@@ -1452,7 +1460,7 @@ function renderStudentReportPage(
       bold: true,
       fill: true,
       fillColor: COLORS.secondarySoft,
-      size: tightPdf ? 6.0 : compactPdf ? 6.4 : 7.4,
+      size: isOLevelReport ? 8.8 : tightPdf ? 6.0 : compactPdf ? 6.4 : 7.4,
     }
   );
 
@@ -1461,13 +1469,13 @@ function renderStudentReportPage(
   drawCell(formatPdfMark(overallAverage, reportType), left, y, s1, summaryRowH, {
     align: "center",
     bold: true,
-    size: tightPdf ? 6.1 : compactPdf ? 6.5 : 7.7,
+    size: isOLevelReport ? 9.2 : tightPdf ? 6.1 : compactPdf ? 6.5 : 7.7,
     valign: "middle",
   });
   drawCell(overallGrade, left + s1, y, s2, summaryRowH, {
     align: "center",
     bold: true,
-    size: tightPdf ? 6.1 : compactPdf ? 6.5 : 7.7,
+    size: isOLevelReport ? 9.2 : tightPdf ? 6.1 : compactPdf ? 6.5 : 7.7,
     valign: "middle",
   });
 
@@ -1475,7 +1483,7 @@ function renderStudentReportPage(
     drawCell(String(totalPoints ?? 0), left + s1 + s2, y, s3, summaryRowH, {
       align: "center",
       bold: true,
-      size: tightPdf ? 6.1 : compactPdf ? 6.5 : 7.7,
+      size: isOLevelReport ? 9.2 : tightPdf ? 6.1 : compactPdf ? 6.5 : 7.7,
       valign: "middle",
     });
   }
@@ -1489,7 +1497,7 @@ function renderStudentReportPage(
     {
       align: "center",
       bold: true,
-      size: tightPdf ? 5.4 : compactPdf ? 5.8 : 6.8,
+      size: isOLevelReport ? 9.4 : tightPdf ? 5.4 : compactPdf ? 5.8 : 6.8,
       valign: "middle",
     }
   );
@@ -1502,12 +1510,12 @@ function renderStudentReportPage(
     {
       align: "center",
       bold: true,
-      size: tightPdf ? 5.4 : compactPdf ? 5.8 : 6.8,
+      size: isOLevelReport ? 9.4 : tightPdf ? 5.4 : compactPdf ? 5.8 : 6.8,
       valign: "middle",
     }
   );
 
-  y += tightPdf ? 7.1 : compactPdf ? 7.9 : 10.0;
+  y += summaryRowH + (isOLevelReport ? 4.3 : tightPdf ? 1.6 : compactPdf ? 2.0 : 2.4);
 
   const subjectBandH = tightPdf ? 5.4 : compactPdf ? 5.8 : 6.9;
   drawBox(left, y, usableWidth, subjectBandH, COLORS.primaryDark, 0);
@@ -1516,12 +1524,12 @@ function renderStudentReportPage(
     left + 2,
     y + (tightPdf ? 3.85 : compactPdf ? 4.15 : 4.95),
     {
-      size: tightPdf ? 7.2 : compactPdf ? 7.7 : 8.7,
+      size: tightPdf ? 7.2 : compactPdf ? 11.2 : 8.7,
       style: "bold",
       color: [255, 255, 255],
     }
   );
-  y += tightPdf ? 5.7 : compactPdf ? 6.2 : 7.6;
+  y += isOLevelReport ? 9.6 : tightPdf ? 5.7 : compactPdf ? 6.2 : 7.6;
 
   const componentCount = scheme.components.length;
 
@@ -1606,19 +1614,34 @@ function renderStudentReportPage(
     commentW += commentBoost;
   }
 
+  if (isOLevelReport) {
+    paperW = 0;
+    subjectW = 39;
+    componentW = componentCount <= 2 ? 18 : componentCount === 3 ? 16 : 13.5;
+    totalW = 15;
+    gradeW = 14;
+    initialsW = 14;
+    commentW = usableWidth - (subjectW + componentCount * componentW + totalW + gradeW + initialsW);
+    if (commentW < 45) {
+      const deficit = 45 - commentW;
+      commentW += deficit;
+      subjectW = Math.max(34, subjectW - deficit);
+    }
+  }
+
   const tableWidth =
     subjectW + paperW + componentCount * componentW + totalW + gradeW + commentW + initialsW;
 
   const tableLeft = left;
 
   let x = tableLeft;
-  const subjectHeadH = tightPdf ? 6.4 : compactPdf ? 7.0 : 8.6;
+  const subjectHeadH = isOLevelReport ? 9.4 : tightPdf ? 6.4 : compactPdf ? 7.0 : 8.6;
 
   drawCell("Subject", x, y, subjectW, subjectHeadH, {
     bold: true,
     fill: true,
     fillColor: COLORS.primarySoft,
-    size: tightPdf ? 6.1 : compactPdf ? 6.5 : 7.4,
+    size: isOLevelReport ? 10.2 : tightPdf ? 6.1 : compactPdf ? 6.5 : 7.4,
   });
   x += subjectW;
 
@@ -1627,7 +1650,7 @@ function renderStudentReportPage(
       bold: true,
       fill: true,
       fillColor: COLORS.primarySoft,
-      size: tightPdf ? 6.1 : compactPdf ? 6.5 : 7.4,
+      size: isOLevelReport ? 10.2 : tightPdf ? 6.1 : compactPdf ? 6.5 : 7.4,
       align: "center",
     });
     x += paperW;
@@ -1648,14 +1671,16 @@ function renderStudentReportPage(
         fill: true,
         fillColor: COLORS.primarySoft,
         align: "center",
-        size: tightPdf
+        size: isOLevelReport
+          ? 7.6
+          : tightPdf
           ? 5.2
           : compactPdf
           ? 5.7
           : hasPapers && scheme.components.length <= 2
           ? 6.8
           : 6.4,
-        lineHeight: tightPdf ? 2.4 : 2.7,
+        lineHeight: isOLevelReport ? 2.65 : tightPdf ? 2.4 : 2.7,
       }
     );
     x += componentW;
@@ -1666,7 +1691,7 @@ function renderStudentReportPage(
     fill: true,
     fillColor: COLORS.primarySoft,
     align: "center",
-    size: tightPdf ? 6.1 : compactPdf ? 6.5 : 7.4,
+    size: isOLevelReport ? 10.2 : tightPdf ? 6.1 : compactPdf ? 6.5 : 7.4,
   });
   x += totalW;
 
@@ -1675,7 +1700,7 @@ function renderStudentReportPage(
     fill: true,
     fillColor: COLORS.primarySoft,
     align: "center",
-    size: tightPdf ? 6.1 : compactPdf ? 6.5 : 7.4,
+    size: isOLevelReport ? 10.2 : tightPdf ? 6.1 : compactPdf ? 6.5 : 7.4,
   });
   x += gradeW;
 
@@ -1683,7 +1708,7 @@ function renderStudentReportPage(
     bold: true,
     fill: true,
     fillColor: COLORS.primarySoft,
-    size: tightPdf ? 5.7 : compactPdf ? 6.1 : 7.1,
+    size: isOLevelReport ? 10.0 : tightPdf ? 5.7 : compactPdf ? 6.1 : 7.1,
   });
   x += commentW;
 
@@ -1692,10 +1717,25 @@ function renderStudentReportPage(
     fill: true,
     fillColor: COLORS.primarySoft,
     align: "center",
-    size: tightPdf ? 6.1 : compactPdf ? 6.5 : 7.4,
+    size: isOLevelReport ? 10.2 : tightPdf ? 6.1 : compactPdf ? 6.5 : 7.4,
   });
 
   y += subjectHeadH;
+
+  const teacherCommentFontSize = isOLevelReport
+    ? 11.2
+    : tightPdf
+    ? 5.6
+    : compactPdf
+    ? 6.0
+    : 7.0;
+  const teacherCommentLineHeight = isOLevelReport
+    ? 4.35
+    : tightPdf
+    ? 2.7
+    : compactPdf
+    ? 3.0
+    : 3.2;
 
   const estimatedContentBottom =
     y +
@@ -1706,11 +1746,15 @@ function renderStudentReportPage(
   const verticalStretch =
     tightPdf ? 1 : compactPdf ? Math.min(1.07, 1 + freeVerticalSpace / 260) : Math.min(1.18, 1 + freeVerticalSpace / 180);
 
+  const oLevelBodyFont = 8.8;
+  const oLevelBodyLineHeight = 3.45;
+  const oLevelRowBaseH = 9.0;
+
   for (const row of rows) {
     const paperRows = row.papers || [];
 
     if (hasPapers && paperRows.length > 0) {
-      const singlePaperHeightBase = tightPdf ? 5.1 : compactPdf ? 5.8 : 7.5;
+      const singlePaperHeightBase = tightPdf ? 6.3 : compactPdf ? 7.0 : 9.0;
       const singlePaperHeight = singlePaperHeightBase * verticalStretch;
       const groupHeight = singlePaperHeight * paperRows.length;
       const subjectHeightNeeded = Math.max(
@@ -1783,9 +1827,9 @@ function renderStudentReportPage(
           rowX += gradeW;
 
           drawCell(row.teacherComment, rowX, y, commentW, subjectHeightNeeded, {
-            size: tightPdf ? 5.6 : compactPdf ? 6.0 : 7.0,
+            size: teacherCommentFontSize,
             valign: "middle",
-            lineHeight: tightPdf ? 2.7 : compactPdf ? 3.0 : 3.2,
+            lineHeight: teacherCommentLineHeight,
           });
           rowX += commentW;
 
@@ -1805,16 +1849,16 @@ function renderStudentReportPage(
     const subjectTextHeight = estimateCellHeight(
       row.subjectName,
       subjectW,
-      tightPdf ? 5.9 : compactPdf ? 6.2 : 7.2,
-      tightPdf ? 2.5 : 2.8
+      isOLevelReport ? oLevelBodyFont : tightPdf ? 5.9 : compactPdf ? 6.2 : 7.2,
+      isOLevelReport ? oLevelBodyLineHeight : tightPdf ? 2.5 : 2.8
     );
     const commentTextHeight = estimateCellHeight(
       row.teacherComment || "—",
       commentW,
-      tightPdf ? 5.6 : compactPdf ? 6.0 : 7.0,
-      tightPdf ? 2.5 : 2.8
+      teacherCommentFontSize,
+      isOLevelReport ? oLevelBodyLineHeight : tightPdf ? 2.5 : 2.8
     );
-    const rowHeightBase = tightPdf ? 5.3 : compactPdf ? 6.1 : 8.1;
+    const rowHeightBase = isOLevelReport ? oLevelRowBaseH : tightPdf ? 6.4 : compactPdf ? 7.2 : 9.4;
     const rowHeight = Math.max(
       rowHeightBase * verticalStretch,
       subjectTextHeight,
@@ -1825,10 +1869,10 @@ function renderStudentReportPage(
 
     x = tableLeft;
     drawCell(row.subjectName, x, y, subjectW, rowHeight, {
-      size: tightPdf ? 5.9 : compactPdf ? 6.2 : 7.2,
+      size: isOLevelReport ? oLevelBodyFont : tightPdf ? 5.9 : compactPdf ? 6.2 : 7.2,
       bold: true,
       valign: "middle",
-      lineHeight: tightPdf ? 2.7 : compactPdf ? 3.0 : 3.2,
+      lineHeight: isOLevelReport ? oLevelBodyLineHeight : tightPdf ? 2.7 : compactPdf ? 3.0 : 3.2,
     });
     x += subjectW;
 
@@ -1845,7 +1889,7 @@ function renderStudentReportPage(
       const item = row.componentScores.find((c) => c.assessmentId === component.assessmentId);
       drawCell(formatPdfMark(item?.weightedScore ?? null, reportType), x, y, componentW, rowHeight, {
         align: "center",
-        size: tightPdf ? 5.9 : compactPdf ? 6.2 : 7.2,
+        size: isOLevelReport ? oLevelBodyFont : tightPdf ? 5.9 : compactPdf ? 6.2 : 7.2,
         valign: "middle",
       });
       x += componentW;
@@ -1854,7 +1898,7 @@ function renderStudentReportPage(
     drawCell(formatPdfMark(row.total, reportType), x, y, totalW, rowHeight, {
       align: "center",
       bold: true,
-      size: tightPdf ? 5.9 : compactPdf ? 6.2 : 7.2,
+      size: isOLevelReport ? oLevelBodyFont : tightPdf ? 5.9 : compactPdf ? 6.2 : 7.2,
       valign: "middle",
     });
     x += totalW;
@@ -1862,41 +1906,231 @@ function renderStudentReportPage(
     drawCell(row.grade, x, y, gradeW, rowHeight, {
       align: "center",
       bold: true,
-      size: tightPdf ? 5.9 : compactPdf ? 6.2 : 7.2,
+      size: isOLevelReport ? oLevelBodyFont : tightPdf ? 5.9 : compactPdf ? 6.2 : 7.2,
       valign: "middle",
     });
     x += gradeW;
 
     drawCell(row.teacherComment, x, y, commentW, rowHeight, {
-      size: tightPdf ? 5.6 : compactPdf ? 6.0 : 7.0,
+      size: teacherCommentFontSize,
       valign: "middle",
-      lineHeight: tightPdf ? 2.7 : compactPdf ? 3.0 : 3.2,
+      lineHeight: teacherCommentLineHeight,
     });
     x += commentW;
 
     drawCell(row.teacherInitials, x, y, initialsW, rowHeight, {
       align: "center",
       bold: true,
-      size: tightPdf ? 5.9 : compactPdf ? 6.2 : 7.2,
+      size: isOLevelReport ? oLevelBodyFont : tightPdf ? 5.9 : compactPdf ? 6.2 : 7.2,
       valign: "middle",
     });
 
     y += rowHeight;
   }
 
-  y += tightPdf ? 1.8 : compactPdf ? 2.4 : 3.8;
+  y += isOLevelReport ? 4.2 : tightPdf ? 1.8 : compactPdf ? 2.4 : 3.8;
 
   const headCommentText = headTeacherComment || "—";
+
+  if (isOLevelReport) {
+    const commentTitleH = 5.8;
+    const commentFont = 11.2;
+    const commentLineHeight = 4.35;
+    const headCommentH = Math.max(
+      12.0,
+      estimateCellHeight(headCommentText, usableWidth, commentFont, commentLineHeight, 3)
+    );
+    const signatureH = signatureImage ? 14.0 : 8.0;
+    const firstPageBottomNeeded =
+      commentTitleH +
+      headCommentH +
+      2.0 +
+      signatureH;
+
+    // Keep the comment and signature on page 1 for O-Level bulk reports.
+    // If the subject table is long, compress only this small bottom block instead of creating
+    // another page before the grade descriptor page.
+    const availableFirstPageBottom = Math.max(16, pageBottom - y - 0.8);
+    const oLevelBottomScale = firstPageBottomNeeded > availableFirstPageBottom
+      ? Math.max(0.72, availableFirstPageBottom / firstPageBottomNeeded)
+      : 1;
+    const scaledCommentTitleH = round2(commentTitleH * oLevelBottomScale);
+    const scaledCommentFont = Math.max(9.2, round2(commentFont * oLevelBottomScale));
+    const scaledCommentLineHeight = Math.max(3.55, round2(commentLineHeight * oLevelBottomScale));
+    const scaledHeadCommentH = Math.max(10.5, round2(headCommentH * oLevelBottomScale));
+
+    drawBox(left, y, usableWidth, scaledCommentTitleH, COLORS.primaryDark, 0);
+    drawText("HEAD TEACHER'S COMMENT", left + 2, y + scaledCommentTitleH - 1.25, {
+      size: Math.max(7.0, round2(8.8 * oLevelBottomScale)),
+      style: "bold",
+      color: [255, 255, 255],
+    });
+    y += scaledCommentTitleH + Math.max(0.8, round2(1.0 * oLevelBottomScale));
+
+    drawCell(headCommentText, left, y, usableWidth, scaledHeadCommentH, {
+      size: scaledCommentFont,
+      valign: "middle",
+      lineHeight: scaledCommentLineHeight,
+    });
+    y += scaledHeadCommentH + Math.max(1.2, round2(2.0 * oLevelBottomScale));
+
+    const signatureY = y;
+    const sigColW = 84;
+    const sigGap = 18;
+    const classSigX = left + 4;
+    const headSigX = classSigX + sigColW + sigGap;
+    const sigLabelFont = Math.max(6.2, round2(7.4 * oLevelBottomScale));
+
+    if (signatureImage) {
+      const sigMaxW = Math.max(50, round2(76 * oLevelBottomScale));
+      const sigMaxH = Math.max(9, round2(15 * oLevelBottomScale));
+      drawImageFit(
+        signatureImage,
+        headSigX + 1,
+        signatureY - sigMaxH + Math.max(4.8, round2(7.2 * oLevelBottomScale)),
+        sigMaxW,
+        sigMaxH
+      );
+    }
+
+    drawText("Class Teacher Signature:", classSigX, signatureY + 1.4, {
+      size: sigLabelFont,
+      color: COLORS.primaryDark,
+    });
+    drawText("Head Teacher Signature:", headSigX, signatureY + 1.4, {
+      size: sigLabelFont,
+      color: COLORS.primaryDark,
+    });
+
+    pdf.setDrawColor(148, 163, 184);
+    pdf.line(classSigX + 34, signatureY + 1.1, classSigX + sigColW, signatureY + 1.1);
+    pdf.line(headSigX + 34, signatureY + 1.1, headSigX + sigColW, signatureY + 1.1);
+
+    pdf.addPage();
+    y = 10;
+
+    const descriptorTitleH = 8.0;
+    const descriptorHeaderH = 10.5;
+    const descriptorHeaderFont = 12.2;
+    const descriptorBodyFont = 11.2;
+    const descriptorLineHeight = 4.35;
+    const gd1 = 17;
+    const gd2 = 41;
+    const gd3 = 30;
+    const gd4 = usableWidth - (gd1 + gd2 + gd3);
+
+    drawBox(left, y, usableWidth, descriptorTitleH, COLORS.accentDark, 0);
+    drawText("GRADE DESCRIPTOR TABLE", left + 2, y + descriptorTitleH - 2.0, {
+      size: 12,
+      style: "bold",
+      color: [255, 255, 255],
+    });
+    y += descriptorTitleH + 1.2;
+
+    drawCell("Grade", left, y, gd1, descriptorHeaderH, {
+      bold: true,
+      fill: true,
+      fillColor: COLORS.accentSoft,
+      size: descriptorHeaderFont,
+      align: "center",
+      valign: "middle",
+    });
+    drawCell("Achievement Level", left + gd1, y, gd2, descriptorHeaderH, {
+      bold: true,
+      fill: true,
+      fillColor: COLORS.accentSoft,
+      size: descriptorHeaderFont,
+      valign: "middle",
+    });
+    drawCell("Marks", left + gd1 + gd2, y, gd3, descriptorHeaderH, {
+      bold: true,
+      fill: true,
+      fillColor: COLORS.accentSoft,
+      size: descriptorHeaderFont,
+      align: "center",
+      valign: "middle",
+    });
+    drawCell("Descriptor", left + gd1 + gd2 + gd3, y, gd4, descriptorHeaderH, {
+      bold: true,
+      fill: true,
+      fillColor: COLORS.accentSoft,
+      size: descriptorHeaderFont,
+      valign: "middle",
+    });
+    y += descriptorHeaderH;
+
+    for (const g of gradeDescriptors) {
+      const rowH = Math.max(
+        15.5,
+        estimateCellHeight(g.achievementLevel, gd2, descriptorBodyFont, descriptorLineHeight, 3),
+        estimateCellHeight(g.descriptor, gd4, descriptorBodyFont, descriptorLineHeight, 4)
+      );
+
+      drawCell(g.grade, left, y, gd1, rowH, {
+        align: "center",
+        bold: true,
+        size: descriptorBodyFont,
+        valign: "middle",
+      });
+      drawCell(g.achievementLevel, left + gd1, y, gd2, rowH, {
+        size: descriptorBodyFont,
+        valign: "middle",
+        lineHeight: descriptorLineHeight,
+      });
+      drawCell(
+        `${formatMark(g.minMark)} - ${formatMark(g.maxMark)}`,
+        left + gd1 + gd2,
+        y,
+        gd3,
+        rowH,
+        {
+          align: "center",
+          size: descriptorBodyFont,
+          valign: "middle",
+          lineHeight: descriptorLineHeight,
+        }
+      );
+      drawCell(g.descriptor, left + gd1 + gd2 + gd3, y, gd4, rowH, {
+        size: descriptorBodyFont,
+        valign: "middle",
+        lineHeight: descriptorLineHeight,
+      });
+      y += rowH;
+    }
+
+    return;
+  }
+
   const remainingHeight = Math.max(pageBottom - y, 28);
 
   const base = {
     blockTitleH: tightPdf ? 4.9 : compactPdf ? 5.4 : 6.5,
-    gdHeaderH: tightPdf ? 4.9 : compactPdf ? 5.4 : 6.2,
-    gdRowH: tightPdf ? 5.0 : compactPdf ? 5.6 : 6.8,
+    gdHeaderH: isOLevelReport
+      ? tightPdf
+        ? 5.6
+        : compactPdf
+        ? 6.2
+        : 7.0
+      : tightPdf
+      ? 4.9
+      : compactPdf
+      ? 5.4
+      : 6.2,
+    gdRowH: isOLevelReport
+      ? tightPdf
+        ? 5.8
+        : compactPdf
+        ? 6.5
+        : 7.8
+      : tightPdf
+      ? 5.0
+      : compactPdf
+      ? 5.6
+      : 6.8,
     betweenBlocks: tightPdf ? 1.9 : compactPdf ? 2.2 : 2.8,
-    commentMinH: tightPdf ? 6.4 : compactPdf ? 7.2 : 8.8,
+    commentMinH: tightPdf ? 7.4 : compactPdf ? 8.3 : 10.0,
     afterCommentGap: tightPdf ? 2.0 : compactPdf ? 2.3 : 3.2,
-    signatureH: signatureImage ? (tightPdf ? 8.7 : compactPdf ? 9.8 : 12.0) : 5.8,
+    signatureH: signatureImage ? (tightPdf ? 10.4 : compactPdf ? 11.8 : 14.4) : 5.8,
     labelFont: tightPdf ? 6.0 : compactPdf ? 6.4 : 7.4,
   };
 
@@ -1905,8 +2139,8 @@ function renderStudentReportPage(
     estimateCellHeight(
       headCommentText,
       usableWidth,
-      tightPdf ? 5.2 : compactPdf ? 5.6 : 6.6,
-      tightPdf ? 2.4 : 2.7,
+      tightPdf ? 6.0 : compactPdf ? 6.6 : 7.6,
+      tightPdf ? 2.8 : compactPdf ? 3.1 : 3.4,
       4
     )
   );
@@ -1932,8 +2166,10 @@ function renderStudentReportPage(
   const gdHeaderH = sc(base.gdHeaderH);
   const gdRowH = sc(base.gdRowH);
   const betweenBlocks = sc(base.betweenBlocks);
-  const commentFont = Math.max(4.8, sc(tightPdf ? 5.2 : compactPdf ? 5.6 : 6.6));
-  const gdFont = Math.max(4.8, sc(tightPdf ? 5.6 : compactPdf ? 6.0 : 7.0));
+  const commentFont = Math.max(5.4, sc(tightPdf ? 6.0 : compactPdf ? 6.6 : 7.6));
+  const gdFont = isOLevelReport
+    ? Math.max(5.6, sc(tightPdf ? 6.3 : compactPdf ? 6.8 : 7.8))
+    : Math.max(4.8, sc(tightPdf ? 5.6 : compactPdf ? 6.0 : 7.0));
   const commentContentH = Math.max(sc(base.commentMinH), sc(baseCommentContentH));
   const afterCommentGap = sc(base.afterCommentGap);
   const sigLabelFont = Math.max(5.0, sc(base.labelFont));
@@ -1985,7 +2221,7 @@ function renderStudentReportPage(
       valign: "middle",
     });
     drawCell(g.achievementLevel, left + gd1, y, gd2, gdRowH, {
-      size: Math.max(4.7, gdFont - 0.2),
+      size: isOLevelReport ? gdFont : Math.max(4.7, gdFont - 0.2),
       valign: "middle",
     });
     drawCell(
@@ -1996,14 +2232,14 @@ function renderStudentReportPage(
       gdRowH,
       {
         align: "center",
-        size: Math.max(4.7, gdFont - 0.2),
+        size: isOLevelReport ? gdFont : Math.max(4.7, gdFont - 0.2),
         valign: "middle",
       }
     );
     drawCell(g.descriptor, left + gd1 + gd2 + gd3, y, gd4, gdRowH, {
-      size: Math.max(4.5, gdFont - 0.5),
+      size: isOLevelReport ? Math.max(5.4, gdFont - 0.1) : Math.max(4.5, gdFont - 0.5),
       valign: "middle",
-      lineHeight: Math.max(2.0, sc(2.5)),
+      lineHeight: isOLevelReport ? Math.max(2.4, sc(2.9)) : Math.max(2.0, sc(2.5)),
     });
     y += gdRowH;
   }
@@ -2021,7 +2257,7 @@ function renderStudentReportPage(
   drawCell(headCommentText, left, y, usableWidth, commentContentH, {
     size: commentFont,
     valign: "middle",
-    lineHeight: Math.max(2.0, sc(2.5)),
+    lineHeight: Math.max(2.4, sc(tightPdf ? 2.8 : compactPdf ? 3.1 : 3.4)),
   });
   y += commentContentH + afterCommentGap;
 
@@ -2031,17 +2267,17 @@ function renderStudentReportPage(
   const classSigX = left + 4;
   const headSigX = classSigX + sigColW + sigGap;
 
-   if (signatureImage) {
-     const sigMaxW = Math.max(20, sc(tightPdf ? 35 : compactPdf ? 39 : 45));
-     const sigMaxH = Math.max(6, sc(tightPdf ? 7.5 : compactPdf ? 8.5 : 10.5));
-     drawImageFit(
-       signatureImage,
-       headSigX + 11,
-       signatureY - sigMaxH + 10,
-       sigMaxW,
-       sigMaxH
-     );
-   }
+  if (signatureImage) {
+    const sigMaxW = Math.max(28, sc(tightPdf ? 69 : compactPdf ? 78 : 90));
+    const sigMaxH = Math.max(10, sc(tightPdf ? 15.75 : compactPdf ? 18.0 : 21.75));
+    drawImageFit(
+      signatureImage,
+      headSigX + 2,
+      signatureY - sigMaxH + 6.5,
+      sigMaxW,
+      sigMaxH
+    );
+  }
 
   drawText("Class Teacher Signature:", classSigX, signatureY + 1.2, {
     size: sigLabelFont,
