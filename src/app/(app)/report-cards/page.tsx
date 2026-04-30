@@ -325,6 +325,16 @@ function studentsFromResponse(data: StudentsResponse): StudentRow[] {
   return Array.isArray(data?.items) ? data.items : [];
 }
 
+function studentsTotalPagesFromResponse(data: StudentsResponse): number {
+  if (Array.isArray(data)) return 1;
+  return Number(data?.totalPages ?? 1);
+}
+
+function studentsTotalFromResponse(data: StudentsResponse, fallback: number): number {
+  if (Array.isArray(data)) return fallback;
+  return Number(data?.total ?? fallback);
+}
+
 async function readJsonSafely<T = any>(res: Response, fallbackMessage: string): Promise<T> {
   const text = await res.text();
 
@@ -2206,8 +2216,8 @@ export default function ReportCardsPage() {
         if (!cancelled) {
           const items = studentsFromResponse(data);
           setStudents(items);
-          setTotalPages(Number(data?.totalPages ?? 1));
-          setTotalStudents(Number(data?.total ?? items.length ?? 0));
+          setTotalPages(studentsTotalPagesFromResponse(data));
+          setTotalStudents(studentsTotalFromResponse(data, items.length));
         }
       } catch (err: any) {
         if (!cancelled) {
