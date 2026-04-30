@@ -30,6 +30,7 @@ type ClassRow = {
 type StudentRow = {
   id: string;
   firstName: string;
+  otherNames?: string | null;
   lastName: string;
   admissionNo?: string | null;
   studentNo?: string | null;
@@ -53,9 +54,14 @@ type ReportType = "O_MID" | "O_EOT" | "A_MID" | "A_EOT";
 type StudentApiRow = {
   id: string;
   firstName: string;
+  otherNames?: string | null;
   lastName: string;
   admissionNo?: string | null;
   studentNo?: string | null;
+  profilePictureUrl?: string | null;
+  photoUrl?: string | null;
+  imageUrl?: string | null;
+  passportPhotoUrl?: string | null;
   enrollments?: Array<{
     id: string;
     isActive?: boolean;
@@ -162,7 +168,7 @@ type StudentReportPayload = {
   reportType: ReportType;
 };
 
-const SCHOOL_NAME = "Zana Christian High School";
+const SCHOOL_NAME = "ZANA CHRISTIAN HIGH SCHOOL";
 const SCHOOL_MOTTO = "IN GOD, WE TRUST";
 const SCHOOL_ADDRESS = "P.O. Box 21312, Kampala, Uganda";
 const SCHOOL_CONTACT = "Tel: 0773 748 168 / 0704 590 234";
@@ -171,7 +177,10 @@ const REPORT_BADGE_URL =
   process.env.NEXT_PUBLIC_REPORT_BADGE_URL || "/report-assets/badge.png";
 const HEADTEACHER_SIGNATURE_URL =
   process.env.NEXT_PUBLIC_HEADTEACHER_SIGNATURE_URL ||
-  "/report-assets/headteacher-signature.jpg";
+  "/report-assets/headteacher-signature.png";
+const DEFAULT_STUDENT_PROFILE_URL =
+  process.env.NEXT_PUBLIC_REPORT_STUDENT_PROFILE_URL ||
+  "/report-assets/student-profile.png";
 
 const REPORT_TYPES: { value: ReportType; label: string }[] = [
   { value: "O_MID", label: "O-Level Mid" },
@@ -227,6 +236,89 @@ const DEFAULT_O_LEVEL_DESCRIPTORS: GradeDescriptorRow[] = [
     order: 5,
   },
 ];
+
+const DEFAULT_A_LEVEL_DESCRIPTORS: GradeDescriptorRow[] = [
+  {
+    grade: "A",
+    achievementLevel: "Excellent",
+    minMark: 80,
+    maxMark: 100,
+    descriptor: "Excellent performance with a very strong demonstration of knowledge and skill.",
+    order: 1,
+  },
+  {
+    grade: "B",
+    achievementLevel: "Very Good",
+    minMark: 75,
+    maxMark: 79.99,
+    descriptor: "Very good performance with clear understanding and sound application.",
+    order: 2,
+  },
+  {
+    grade: "C",
+    achievementLevel: "Good",
+    minMark: 60,
+    maxMark: 74.99,
+    descriptor: "Good performance showing adequate understanding and application.",
+    order: 3,
+  },
+  {
+    grade: "D",
+    achievementLevel: "Credit",
+    minMark: 50,
+    maxMark: 59.99,
+    descriptor: "Creditable performance with acceptable competence.",
+    order: 4,
+  },
+  {
+    grade: "E",
+    achievementLevel: "Fair",
+    minMark: 45,
+    maxMark: 49.99,
+    descriptor: "Fair performance with moderate competence.",
+    order: 5,
+  },
+  {
+    grade: "O",
+    achievementLevel: "Pass",
+    minMark: 40,
+    maxMark: 44.99,
+    descriptor: "Pass level performance with minimum acceptable competence.",
+    order: 6,
+  },
+  {
+    grade: "F",
+    achievementLevel: "Fail",
+    minMark: 0,
+    maxMark: 39.99,
+    descriptor: "Below the expected minimum standard.",
+    order: 7,
+  },
+];
+
+function getEffectiveGradeDescriptors(
+  reportType: ReportType | string,
+  schemeDescriptors?: GradeDescriptorRow[]
+) {
+  if (reportType === "A_MID" || reportType === "A_EOT") {
+    return DEFAULT_A_LEVEL_DESCRIPTORS;
+  }
+
+  return Array.isArray(schemeDescriptors) && schemeDescriptors.length > 0
+    ? schemeDescriptors
+    : DEFAULT_O_LEVEL_DESCRIPTORS;
+}
+
+function getStudentProfileImageUrl(student: StudentApiRow | null) {
+  if (!student) return DEFAULT_STUDENT_PROFILE_URL;
+  return (
+    student.profilePictureUrl ||
+    student.photoUrl ||
+    student.imageUrl ||
+    student.passportPhotoUrl ||
+    DEFAULT_STUDENT_PROFILE_URL
+  );
+}
 
 function studentsFromResponse(data: StudentsResponse): StudentRow[] {
   if (Array.isArray(data)) return data;
@@ -530,7 +622,14 @@ async function loadPdfImage(url: string, alias: string): Promise<LoadedPdfImage 
 
     const blob = await res.blob();
 
-    if (alias === "badge") {
+    const isPng =
+      blob.type === "image/png" ||
+      absoluteUrl.toLowerCase().includes(".png") ||
+      alias === "badge" ||
+      alias === "profile" ||
+      alias === "signature";
+
+    if (isPng) {
       const dataUrl = await blobToDataUrl(blob);
       const size = await new Promise<{ width: number; height: number }>((resolve, reject) => {
         const img = new window.Image();
@@ -616,15 +715,16 @@ async function buildStudentReportPayload(params: {
         weightOutOf: Number(component.weightOutOf ?? 0),
       })
     ),
-    gradeDescriptors:
-      Array.isArray(schemeData.gradeDescriptors) &&
-      schemeData.gradeDescriptors.length > 0
+    gradeDescriptors: getEffectiveGradeDescriptors(
+      reportType,
+      Array.isArray(schemeData.gradeDescriptors)
         ? schemeData.gradeDescriptors.map((g: any) => ({
             ...g,
             minMark: Number(g.minMark),
             maxMark: Number(g.maxMark),
           }))
-        : DEFAULT_O_LEVEL_DESCRIPTORS,
+        : []
+    ),
   };
 
   const foundYear = (Array.isArray(yearsData) ? yearsData : []).find(
@@ -887,6 +987,7 @@ function renderStudentReportPage(
   assets: {
     badgeImage: LoadedPdfImage | null;
     signatureImage: LoadedPdfImage | null;
+    profileImage: LoadedPdfImage | null;
   },
   isFirstPage: boolean
 ) {
@@ -940,6 +1041,7 @@ function renderStudentReportPage(
 
   const badgeImage = assets.badgeImage;
   const signatureImage = assets.signatureImage;
+  const profileImage = assets.profileImage;
   void signatureImage;
 
   const left = 6.2;
@@ -963,14 +1065,19 @@ function renderStudentReportPage(
   const loosenFactor = tightPdf ? 0 : compactPdf ? 0.04 : 0.12;
 
   const COLORS = {
-    border: [203, 213, 225] as [number, number, number],
-    slateFill: [248, 250, 252] as [number, number, number],
-    primaryDark: [79, 70, 229] as [number, number, number],
-    primarySoft: [224, 231, 255] as [number, number, number],
-    secondaryDark: [13, 148, 136] as [number, number, number],
-    secondarySoft: [204, 251, 241] as [number, number, number],
-    accentDark: [217, 119, 6] as [number, number, number],
-    accentSoft: [254, 243, 199] as [number, number, number],
+    bodyText: [30, 41, 59] as [number, number, number],
+    headerText: [17, 50, 83] as [number, number, number],
+    mutedText: [71, 85, 105] as [number, number, number],
+    border: [176, 190, 205] as [number, number, number],
+    slateFill: [250, 252, 247] as [number, number, number],
+    headerFill: [255, 253, 247] as [number, number, number],
+    imageBoxFill: [246, 249, 244] as [number, number, number],
+    primaryDark: [25, 77, 112] as [number, number, number],
+    primarySoft: [225, 240, 249] as [number, number, number],
+    secondaryDark: [28, 116, 88] as [number, number, number],
+    secondarySoft: [224, 243, 234] as [number, number, number],
+    accentDark: [178, 82, 49] as [number, number, number],
+    accentSoft: [255, 240, 224] as [number, number, number],
   };
 
   const drawText = (
@@ -986,10 +1093,10 @@ function renderStudentReportPage(
   ) => {
     pdf.setFont("helvetica", opts?.style || "normal");
     pdf.setFontSize(opts?.size || 10);
-    const color = opts?.color || [15, 23, 42];
+    const color = opts?.color || COLORS.bodyText;
     pdf.setTextColor(color[0], color[1], color[2]);
     pdf.text(text, x, yy, { align: opts?.align || "left" });
-    pdf.setTextColor(15, 23, 42);
+    pdf.setTextColor(COLORS.bodyText[0], COLORS.bodyText[1], COLORS.bodyText[2]);
   };
 
   const drawBox = (
@@ -1000,12 +1107,22 @@ function renderStudentReportPage(
     fillRgb?: [number, number, number],
     radius = 1.2
   ) => {
+    const squareCorners = radius <= 0;
+
     if (fillRgb) {
       pdf.setFillColor(fillRgb[0], fillRgb[1], fillRgb[2]);
-      pdf.roundedRect(x, yy, w, h, radius, radius, "F");
+      if (squareCorners) {
+        pdf.rect(x, yy, w, h, "F");
+      } else {
+        pdf.roundedRect(x, yy, w, h, radius, radius, "F");
+      }
     }
     pdf.setDrawColor(COLORS.border[0], COLORS.border[1], COLORS.border[2]);
-    pdf.roundedRect(x, yy, w, h, radius, radius);
+    if (squareCorners) {
+      pdf.rect(x, yy, w, h);
+    } else {
+      pdf.roundedRect(x, yy, w, h, radius, radius);
+    }
   };
 
   const estimateCellHeight = (
@@ -1055,7 +1172,7 @@ function renderStudentReportPage(
     pdf.setFont("helvetica", opts?.bold ? "bold" : "normal");
     pdf.setFontSize(fontSize);
 
-    const textColor = opts?.textColor || [15, 23, 42];
+    const textColor = opts?.textColor || COLORS.bodyText;
     pdf.setTextColor(textColor[0], textColor[1], textColor[2]);
 
     const align = opts?.align || "left";
@@ -1075,7 +1192,7 @@ function renderStudentReportPage(
       pdf.text(line, tx, startY + idx * lineHeight, { align });
     });
 
-    pdf.setTextColor(15, 23, 42);
+    pdf.setTextColor(COLORS.bodyText[0], COLORS.bodyText[1], COLORS.bodyText[2]);
   };
 
   const drawImageFit = (
@@ -1119,38 +1236,66 @@ function renderStudentReportPage(
   const headerBandH = tightPdf ? 5.0 : compactPdf ? 5.5 : 6.5;
 
   const outerPad = tightPdf ? 1.4 : 1.6;
-  const badgeSlotW = badgeImage ? (tightPdf ? 38 : compactPdf ? 41 : 45) : 0;
-  const badgeBoxW = badgeImage ? badgeSlotW - 1.0 : 0;
-  const badgeBoxH = badgeImage ? headerH - 3.2 : 0;
-  const badgeGap = badgeImage ? 2.8 : 0;
+  const sideSlotW = tightPdf ? 35 : compactPdf ? 39 : 43;
+  const sideBoxW = sideSlotW - 1.2;
+  const sideBoxH = headerH - 3.2;
+  const sideBoxY = y + 1.2;
 
-  drawBox(left, y, usableWidth, headerH, [255, 255, 255], 2.2);
+  drawBox(left, y, usableWidth, headerH, COLORS.headerFill, 2.2);
 
   if (badgeImage) {
     const badgeBoxX = left + outerPad;
-    const badgeBoxY = y + 1.2;
-    drawBox(badgeBoxX, badgeBoxY, badgeBoxW, badgeBoxH, [248, 250, 252], 1.8);
+    drawBox(
+      badgeBoxX,
+      sideBoxY,
+      sideBoxW,
+      sideBoxH,
+      badgeImage.format === "PNG" ? undefined : COLORS.imageBoxFill,
+      1.2
+    );
     drawImageFit(
       badgeImage,
       badgeBoxX + 0.3,
-      badgeBoxY + 0.3,
-      badgeBoxW - 0.6,
-      badgeBoxH - 0.6
+      sideBoxY + 0.3,
+      sideBoxW - 0.6,
+      sideBoxH - 0.6
     );
   }
 
-  const contentLeft = left + (badgeImage ? badgeSlotW + badgeGap : 0);
-  const contentWidth = usableWidth - (badgeImage ? badgeSlotW + badgeGap : 0);
-  const contentCenterX = contentLeft + contentWidth / 2;
+  if (profileImage) {
+    const profileBoxX = left + usableWidth - outerPad - sideBoxW;
+    drawBox(
+      profileBoxX,
+      sideBoxY,
+      sideBoxW,
+      sideBoxH,
+      profileImage.format === "PNG" ? undefined : COLORS.imageBoxFill,
+      1.2
+    );
+    drawImageFit(
+      profileImage,
+      profileBoxX + 0.3,
+      sideBoxY + 0.3,
+      sideBoxW - 0.6,
+      sideBoxH - 0.6
+    );
+  }
+
+  const contentLeft = left + sideSlotW + (tightPdf ? 2 : 3);
+  const contentRight = left + usableWidth - sideSlotW - (tightPdf ? 2 : 3);
+  const contentWidth = contentRight - contentLeft;
+  const contentCenterX = left + usableWidth / 2;
 
   drawText(SCHOOL_NAME, contentCenterX, y + (tightPdf ? 6.1 : compactPdf ? 6.9 : 7.8), {
     size: tightPdf ? 14 : compactPdf ? 15.2 : 16.8,
     style: "bold",
     align: "center",
+    color: COLORS.headerText,
   });
   drawText(SCHOOL_MOTTO, contentCenterX, y + (tightPdf ? 9.9 : compactPdf ? 10.9 : 12.5), {
     size: tightPdf ? 7.6 : compactPdf ? 8.2 : 9.0,
     align: "center",
+    color: COLORS.secondaryDark,
   });
   drawText(
     `${SCHOOL_ADDRESS} • ${SCHOOL_CONTACT}`,
@@ -1159,6 +1304,7 @@ function renderStudentReportPage(
     {
       size: tightPdf ? 6.7 : compactPdf ? 7.2 : 8.0,
       align: "center",
+      color: COLORS.mutedText,
     }
   );
 
@@ -1214,7 +1360,7 @@ function renderStudentReportPage(
     const labelWidth = pdf.getTextWidth(labelText);
     pdf.setFont("helvetica", "normal");
     pdf.setFontSize(tightPdf ? 6.8 : compactPdf ? 7.1 : 7.7);
-    pdf.setTextColor(15, 23, 42);
+    pdf.setTextColor(COLORS.bodyText[0], COLORS.bodyText[1], COLORS.bodyText[2]);
     pdf.text(String(value || "—"), x + 2 + labelWidth + 1.2, yy + h / 2 + 1.1);
   };
 
@@ -1232,7 +1378,7 @@ function renderStudentReportPage(
   y += tightPdf ? 8.8 : compactPdf ? 9.8 : 11.2;
 
   const summaryBandH = tightPdf ? 5.4 : compactPdf ? 5.8 : 6.9;
-  drawBox(left, y, usableWidth, summaryBandH, COLORS.secondaryDark, 1.4);
+  drawBox(left, y, usableWidth, summaryBandH, COLORS.secondaryDark, 0);
   drawText("SUMMARY RESULTS", left + 2, y + (tightPdf ? 3.85 : compactPdf ? 4.15 : 4.95), {
     size: tightPdf ? 7.2 : compactPdf ? 7.7 : 8.7,
     style: "bold",
@@ -1354,7 +1500,7 @@ function renderStudentReportPage(
   y += tightPdf ? 7.1 : compactPdf ? 7.9 : 10.0;
 
   const subjectBandH = tightPdf ? 5.4 : compactPdf ? 5.8 : 6.9;
-  drawBox(left, y, usableWidth, subjectBandH, COLORS.primaryDark, 1.4);
+  drawBox(left, y, usableWidth, subjectBandH, COLORS.primaryDark, 0);
   drawText(
     "SUBJECT ACHIEVEMENT LEVEL",
     left + 2,
@@ -1453,7 +1599,7 @@ function renderStudentReportPage(
   const tableWidth =
     subjectW + paperW + componentCount * componentW + totalW + gradeW + commentW + initialsW;
 
-  const tableLeft = left + (usableWidth - tableWidth) / 2;
+  const tableLeft = left;
 
   let x = tableLeft;
   const subjectHeadH = tightPdf ? 6.4 : compactPdf ? 7.0 : 8.6;
@@ -1574,7 +1720,7 @@ function renderStudentReportPage(
         size: tightPdf ? 5.8 : compactPdf ? 6.2 : 7.2,
         bold: true,
         valign: "middle",
-        lineHeight: tightPdf ? 2.5 : 2.8,
+        lineHeight: tightPdf ? 2.7 : compactPdf ? 3.0 : 3.2,
       });
       groupX += subjectW;
 
@@ -1627,9 +1773,9 @@ function renderStudentReportPage(
           rowX += gradeW;
 
           drawCell(row.teacherComment, rowX, y, commentW, subjectHeightNeeded, {
-            size: tightPdf ? 5.0 : compactPdf ? 5.4 : 6.4,
+            size: tightPdf ? 5.6 : compactPdf ? 6.0 : 7.0,
             valign: "middle",
-            lineHeight: tightPdf ? 2.5 : 2.8,
+            lineHeight: tightPdf ? 2.7 : compactPdf ? 3.0 : 3.2,
           });
           rowX += commentW;
 
@@ -1655,7 +1801,7 @@ function renderStudentReportPage(
     const commentTextHeight = estimateCellHeight(
       row.teacherComment || "—",
       commentW,
-      tightPdf ? 5.0 : compactPdf ? 5.4 : 6.4,
+      tightPdf ? 5.6 : compactPdf ? 6.0 : 7.0,
       tightPdf ? 2.5 : 2.8
     );
     const rowHeightBase = tightPdf ? 5.3 : compactPdf ? 6.1 : 8.1;
@@ -1672,7 +1818,7 @@ function renderStudentReportPage(
       size: tightPdf ? 5.9 : compactPdf ? 6.2 : 7.2,
       bold: true,
       valign: "middle",
-      lineHeight: tightPdf ? 2.5 : 2.8,
+      lineHeight: tightPdf ? 2.7 : compactPdf ? 3.0 : 3.2,
     });
     x += subjectW;
 
@@ -1712,9 +1858,9 @@ function renderStudentReportPage(
     x += gradeW;
 
     drawCell(row.teacherComment, x, y, commentW, rowHeight, {
-      size: tightPdf ? 5.0 : compactPdf ? 5.4 : 6.4,
+      size: tightPdf ? 5.6 : compactPdf ? 6.0 : 7.0,
       valign: "middle",
-      lineHeight: tightPdf ? 2.5 : 2.8,
+      lineHeight: tightPdf ? 2.7 : compactPdf ? 3.0 : 3.2,
     });
     x += commentW;
 
@@ -1777,7 +1923,7 @@ function renderStudentReportPage(
   const gdRowH = sc(base.gdRowH);
   const betweenBlocks = sc(base.betweenBlocks);
   const commentFont = Math.max(4.8, sc(tightPdf ? 5.2 : compactPdf ? 5.6 : 6.6));
-  const gdFont = Math.max(4.8, sc(tightPdf ? 5.0 : compactPdf ? 5.4 : 6.4));
+  const gdFont = Math.max(4.8, sc(tightPdf ? 5.6 : compactPdf ? 6.0 : 7.0));
   const commentContentH = Math.max(sc(base.commentMinH), sc(baseCommentContentH));
   const afterCommentGap = sc(base.afterCommentGap);
   const sigLabelFont = Math.max(5.0, sc(base.labelFont));
@@ -1787,7 +1933,7 @@ function renderStudentReportPage(
   const gd3 = tightPdf ? 18 : compactPdf ? 20 : 25;
   const gd4 = usableWidth - (gd1 + gd2 + gd3);
 
-  drawBox(left, y, usableWidth, bottomTitleH, COLORS.accentDark, 1.2);
+  drawBox(left, y, usableWidth, bottomTitleH, COLORS.accentDark, 0);
   drawText("GRADE DESCRIPTOR TABLE", left + 2, y + bottomTitleH - 1.2, {
     size: Math.max(5.8, sc(tightPdf ? 6.8 : compactPdf ? 7.2 : 8.0)),
     style: "bold",
@@ -1854,7 +2000,7 @@ function renderStudentReportPage(
 
   y += betweenBlocks;
 
-  drawBox(left, y, usableWidth, bottomTitleH, COLORS.primaryDark, 1.2);
+  drawBox(left, y, usableWidth, bottomTitleH, COLORS.primaryDark, 0);
   drawText("HEAD TEACHER'S COMMENT", left + 2, y + bottomTitleH - 1.2, {
     size: Math.max(5.8, sc(tightPdf ? 6.8 : compactPdf ? 7.2 : 8.0)),
     style: "bold",
@@ -2135,10 +2281,15 @@ export default function ReportCardsPage() {
             reportType,
           });
 
+          const profileImage = await loadPdfImage(
+            getStudentProfileImageUrl(payload.student),
+            `profile-${payload.student.id}`
+          );
+
           renderStudentReportPage(
             pdf,
             payload,
-            { badgeImage, signatureImage },
+            { badgeImage, signatureImage, profileImage },
             first
           );
           first = false;

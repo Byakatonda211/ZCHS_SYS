@@ -187,6 +187,78 @@ const DEFAULT_O_LEVEL_DESCRIPTORS: GradeDescriptorRow[] = [
   },
 ];
 
+const DEFAULT_A_LEVEL_DESCRIPTORS: GradeDescriptorRow[] = [
+  {
+    grade: "A",
+    achievementLevel: "Excellent",
+    minMark: 80,
+    maxMark: 100,
+    descriptor: "Excellent performance with a very strong demonstration of knowledge and skill.",
+    order: 1,
+  },
+  {
+    grade: "B",
+    achievementLevel: "Very Good",
+    minMark: 75,
+    maxMark: 79.99,
+    descriptor: "Very good performance with clear understanding and sound application.",
+    order: 2,
+  },
+  {
+    grade: "C",
+    achievementLevel: "Good",
+    minMark: 60,
+    maxMark: 74.99,
+    descriptor: "Good performance showing adequate understanding and application.",
+    order: 3,
+  },
+  {
+    grade: "D",
+    achievementLevel: "Credit",
+    minMark: 50,
+    maxMark: 59.99,
+    descriptor: "Creditable performance with acceptable competence.",
+    order: 4,
+  },
+  {
+    grade: "E",
+    achievementLevel: "Fair",
+    minMark: 45,
+    maxMark: 49.99,
+    descriptor: "Fair performance with moderate competence.",
+    order: 5,
+  },
+  {
+    grade: "O",
+    achievementLevel: "Pass",
+    minMark: 40,
+    maxMark: 44.99,
+    descriptor: "Pass level performance with minimum acceptable competence.",
+    order: 6,
+  },
+  {
+    grade: "F",
+    achievementLevel: "Fail",
+    minMark: 0,
+    maxMark: 39.99,
+    descriptor: "Below the expected minimum standard.",
+    order: 7,
+  },
+];
+
+function getEffectiveGradeDescriptors(
+  reportType: ReportType | string,
+  schemeDescriptors?: GradeDescriptorRow[]
+) {
+  if (reportType === "A_MID" || reportType === "A_EOT") {
+    return DEFAULT_A_LEVEL_DESCRIPTORS;
+  }
+
+  return Array.isArray(schemeDescriptors) && schemeDescriptors.length > 0
+    ? schemeDescriptors
+    : DEFAULT_O_LEVEL_DESCRIPTORS;
+}
+
 function round2(v: any) {
   const n = Number(v);
   if (!Number.isFinite(n)) return null;
@@ -195,10 +267,29 @@ function round2(v: any) {
 
 function gradeScore(score: number | null, descriptors: GradeDescriptorRow[]) {
   if (score === null) return "—";
-  const found = (descriptors || []).find(
-    (d) => Number(score) >= Number(d.minMark) && Number(score) <= Number(d.maxMark)
+
+  const n = Number(score);
+  if (!Number.isFinite(n)) return "—";
+
+  const sorted = [...(descriptors || [])].sort(
+    (a, b) => Number(a.minMark) - Number(b.minMark)
   );
-  return found?.grade || "—";
+
+  const epsilon = 0.01;
+  const found = sorted.find(
+    (d) => n + epsilon >= Number(d.minMark) && n - epsilon <= Number(d.maxMark)
+  );
+
+  if (found?.grade) return found.grade;
+
+  if (sorted.length > 0) {
+    if (n < Number(sorted[0].minMark)) return sorted[0].grade || "—";
+    if (n > Number(sorted[sorted.length - 1].maxMark)) {
+      return sorted[sorted.length - 1].grade || "—";
+    }
+  }
+
+  return "—";
 }
 
 function normalizeSubjectName(name: string) {
@@ -645,15 +736,16 @@ export default function StudentReportCardPage() {
               weightOutOf: Number(component.weightOutOf ?? 0),
             })
           ),
-          gradeDescriptors:
-            Array.isArray(schemeData.gradeDescriptors) &&
-            schemeData.gradeDescriptors.length > 0
+          gradeDescriptors: getEffectiveGradeDescriptors(
+            reportType,
+            Array.isArray(schemeData.gradeDescriptors)
               ? schemeData.gradeDescriptors.map((g: any) => ({
                   ...g,
                   minMark: Number(g.minMark),
                   maxMark: Number(g.maxMark),
                 }))
-              : DEFAULT_O_LEVEL_DESCRIPTORS,
+              : []
+          ),
         };
 
         const foundYear = (Array.isArray(yearsData) ? yearsData : []).find(
@@ -1673,7 +1765,7 @@ export default function StudentReportCardPage() {
             size: tightPdf ? 5.8 : compactPdf ? 6.2 : 7.2,
             bold: true,
             valign: "middle",
-            lineHeight: tightPdf ? 2.5 : 2.8,
+            lineHeight: tightPdf ? 2.7 : compactPdf ? 3.0 : 3.2,
           });
           groupX += subjectW;
 
@@ -1726,9 +1818,9 @@ export default function StudentReportCardPage() {
               rowX += gradeW;
 
               drawCell(row.teacherComment, rowX, y, commentW, subjectHeightNeeded, {
-                size: tightPdf ? 5.0 : compactPdf ? 5.4 : 6.4,
+                size: tightPdf ? 5.6 : compactPdf ? 6.0 : 7.0,
                 valign: "middle",
-                lineHeight: tightPdf ? 2.5 : 2.8,
+                lineHeight: tightPdf ? 2.7 : compactPdf ? 3.0 : 3.2,
               });
               rowX += commentW;
 
@@ -1754,7 +1846,7 @@ export default function StudentReportCardPage() {
         const commentTextHeight = estimateCellHeight(
           row.teacherComment || "—",
           commentW,
-          tightPdf ? 5.0 : compactPdf ? 5.4 : 6.4,
+          tightPdf ? 5.6 : compactPdf ? 6.0 : 7.0,
           tightPdf ? 2.5 : 2.8
         );
         const rowHeightBase = tightPdf ? 5.3 : compactPdf ? 6.1 : 8.1;
@@ -1771,7 +1863,7 @@ export default function StudentReportCardPage() {
           size: tightPdf ? 5.9 : compactPdf ? 6.2 : 7.2,
           bold: true,
           valign: "middle",
-          lineHeight: tightPdf ? 2.5 : 2.8,
+          lineHeight: tightPdf ? 2.7 : compactPdf ? 3.0 : 3.2,
         });
         x += subjectW;
 
@@ -1811,9 +1903,9 @@ export default function StudentReportCardPage() {
         x += gradeW;
 
         drawCell(row.teacherComment, x, y, commentW, rowHeight, {
-          size: tightPdf ? 5.0 : compactPdf ? 5.4 : 6.4,
+          size: tightPdf ? 5.6 : compactPdf ? 6.0 : 7.0,
           valign: "middle",
-          lineHeight: tightPdf ? 2.5 : 2.8,
+          lineHeight: tightPdf ? 2.7 : compactPdf ? 3.0 : 3.2,
         });
         x += commentW;
 
