@@ -1954,40 +1954,40 @@ function renderStudentReportPage(
     const oLevelBottomScale = firstPageBottomNeeded > availableFirstPageBottom
       ? Math.max(0.72, availableFirstPageBottom / firstPageBottomNeeded)
       : 1;
-    const scaledCommentTitleH = round2(commentTitleH * oLevelBottomScale);
-    const scaledCommentFont = Math.max(9.2, round2(commentFont * oLevelBottomScale));
-    const scaledCommentLineHeight = Math.max(3.55, round2(commentLineHeight * oLevelBottomScale));
-    const scaledHeadCommentH = Math.max(10.5, round2(headCommentH * oLevelBottomScale));
+    const scaledCommentTitleH = round2(commentTitleH * oLevelBottomScale) ?? commentTitleH;
+    const scaledCommentFont = Math.max(9.2, round2(commentFont * oLevelBottomScale) ?? commentFont);
+    const scaledCommentLineHeight = Math.max(3.55, round2(commentLineHeight * oLevelBottomScale) ?? commentLineHeight);
+    const scaledHeadCommentH = Math.max(10.5, round2(headCommentH * oLevelBottomScale) ?? headCommentH);
 
     drawBox(left, y, usableWidth, scaledCommentTitleH, COLORS.primaryDark, 0);
     drawText("HEAD TEACHER'S COMMENT", left + 2, y + scaledCommentTitleH - 1.25, {
-      size: Math.max(7.0, round2(8.8 * oLevelBottomScale)),
+      size: Math.max(7.0, round2(8.8 * oLevelBottomScale) ?? 8.8),
       style: "bold",
       color: [255, 255, 255],
     });
-    y += scaledCommentTitleH + Math.max(0.8, round2(1.0 * oLevelBottomScale));
+    y += scaledCommentTitleH + Math.max(0.8, round2(1.0 * oLevelBottomScale) ?? 1.0);
 
     drawCell(headCommentText, left, y, usableWidth, scaledHeadCommentH, {
       size: scaledCommentFont,
       valign: "middle",
       lineHeight: scaledCommentLineHeight,
     });
-    y += scaledHeadCommentH + Math.max(1.2, round2(2.0 * oLevelBottomScale));
+    y += scaledHeadCommentH + Math.max(1.2, round2(2.0 * oLevelBottomScale) ?? 2.0);
 
     const signatureY = y;
     const sigColW = 84;
     const sigGap = 18;
     const classSigX = left + 4;
     const headSigX = classSigX + sigColW + sigGap;
-    const sigLabelFont = Math.max(6.2, round2(7.4 * oLevelBottomScale));
+    const sigLabelFont = Math.max(6.2, round2(7.4 * oLevelBottomScale) ?? 7.4);
 
     if (signatureImage) {
-      const sigMaxW = Math.max(50, round2(76 * oLevelBottomScale));
-      const sigMaxH = Math.max(9, round2(15 * oLevelBottomScale));
+      const sigMaxW = Math.max(50, round2(76 * oLevelBottomScale) ?? 76);
+      const sigMaxH = Math.max(9, round2(15 * oLevelBottomScale) ?? 15);
       drawImageFit(
         signatureImage,
         headSigX + 1,
-        signatureY - sigMaxH + Math.max(4.8, round2(7.2 * oLevelBottomScale)),
+        signatureY - sigMaxH + Math.max(4.8, round2(7.2 * oLevelBottomScale) ?? 7.2),
         sigMaxW,
         sigMaxH
       );
