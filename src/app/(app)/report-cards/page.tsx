@@ -2031,18 +2031,17 @@ function renderStudentReportPage(
   const classSigX = left + 4;
   const headSigX = classSigX + sigColW + sigGap;
 
-  // Signature image intentionally disabled so the Head Teacher can sign manually.
-  // if (signatureImage) {
-  //   const sigMaxW = Math.max(20, sc(tightPdf ? 35 : compactPdf ? 39 : 45));
-  //   const sigMaxH = Math.max(6, sc(tightPdf ? 7.5 : compactPdf ? 8.5 : 10.5));
-  //   drawImageFit(
-  //     signatureImage,
-  //     headSigX + 11,
-  //     signatureY - sigMaxH + 10,
-  //     sigMaxW,
-  //     sigMaxH
-  //   );
-  // }
+   if (signatureImage) {
+     const sigMaxW = Math.max(20, sc(tightPdf ? 35 : compactPdf ? 39 : 45));
+     const sigMaxH = Math.max(6, sc(tightPdf ? 7.5 : compactPdf ? 8.5 : 10.5));
+     drawImageFit(
+       signatureImage,
+       headSigX + 11,
+       signatureY - sigMaxH + 10,
+       sigMaxW,
+       sigMaxH
+     );
+   }
 
   drawText("Class Teacher Signature:", classSigX, signatureY + 1.2, {
     size: sigLabelFont,
