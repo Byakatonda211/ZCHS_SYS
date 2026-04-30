@@ -53,13 +53,8 @@ type ReportType = "O_MID" | "O_EOT" | "A_MID" | "A_EOT";
 type StudentApiRow = {
   id: string;
   firstName: string;
-  otherNames?: string | null;
   lastName: string;
   admissionNo?: string | null;
-  profilePictureUrl?: string | null;
-  photoUrl?: string | null;
-  imageUrl?: string | null;
-  passportPhotoUrl?: string | null;
   studentNo?: string | null;
   enrollments?: Array<{
     id: string;
@@ -167,7 +162,7 @@ type StudentReportPayload = {
   reportType: ReportType;
 };
 
-const SCHOOL_NAME = "ZANA CHRISTIAN HIGH SCHOOL";
+const SCHOOL_NAME = "Zana Christian High School";
 const SCHOOL_MOTTO = "IN GOD, WE TRUST";
 const SCHOOL_ADDRESS = "P.O. Box 21312, Kampala, Uganda";
 const SCHOOL_CONTACT = "Tel: 0773 748 168 / 0704 590 234";
@@ -176,10 +171,7 @@ const REPORT_BADGE_URL =
   process.env.NEXT_PUBLIC_REPORT_BADGE_URL || "/report-assets/badge.png";
 const HEADTEACHER_SIGNATURE_URL =
   process.env.NEXT_PUBLIC_HEADTEACHER_SIGNATURE_URL ||
-  "/report-assets/headteacher-signature.png";
-const DEFAULT_STUDENT_PROFILE_URL =
-  process.env.NEXT_PUBLIC_REPORT_STUDENT_PROFILE_URL ||
-  "/report-assets/student-profile.png";
+  "/report-assets/headteacher-signature.jpg";
 
 const REPORT_TYPES: { value: ReportType; label: string }[] = [
   { value: "O_MID", label: "O-Level Mid" },
@@ -241,18 +233,47 @@ function studentsFromResponse(data: StudentsResponse): StudentRow[] {
   return Array.isArray(data?.items) ? data.items : [];
 }
 
+async function readJsonSafely<T = any>(res: Response, fallbackMessage: string): Promise<T> {
+  const text = await res.text();
+
+  if (!text.trim()) {
+    if (!res.ok) throw new Error(`${fallbackMessage} (${res.status})`);
+    return null as T;
+  }
+
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    const preview = text.replace(/\s+/g, " ").slice(0, 220);
+    throw new Error(
+      `${fallbackMessage}. The server returned a non-JSON response (${res.status}). ${preview}`
+    );
+  }
+}
+
+async function fetchJsonSafely<T = any>(
+  url: string,
+  init: RequestInit,
+  fallbackMessage: string
+): Promise<T> {
+  const res = await fetch(url, init);
+  const data = await readJsonSafely<T>(res, fallbackMessage);
+
+  if (!res.ok) {
+    const apiError =
+      typeof data === "object" && data && "error" in data
+        ? String((data as any).error)
+        : "";
+    throw new Error(apiError || `${fallbackMessage} (${res.status})`);
+  }
+
+  return data;
+}
+
 function round2(v: any) {
   const n = Number(v);
   if (!Number.isFinite(n)) return null;
   return Math.round(n * 100) / 100;
-}
-
-function roundHalfUpToWhole(value: number | null | undefined) {
-  if (value === null || value === undefined || Number.isNaN(Number(value))) return null;
-
-  // Totals are sometimes produced from weighted values, so an exact .5 can
-  // arrive as 59.499999999. The small tolerance keeps .5 values rounding up.
-  return Math.round(Number(value) + 1e-6);
 }
 
 function formatMark(value: number | null) {
@@ -261,25 +282,31 @@ function formatMark(value: number | null) {
   return s.replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
 }
 
-function formatPdfMark(value: number | null, reportType: string) {
-  if (value === null || Number.isNaN(value)) return "—";
-
-  // PDF-only: end-of-term report cards should show marks rounded to 0 decimal places.
-  // This matches the individual report card PDF.
-  if (reportType === "O_EOT" || reportType === "A_EOT") {
-    const rounded = roundHalfUpToWhole(value);
-    return rounded === null ? "—" : String(rounded);
-  }
-
-  return formatMark(value);
-}
-
 function gradeScore(score: number | null, descriptors: GradeDescriptorRow[]) {
   if (score === null) return "—";
-  const found = (descriptors || []).find(
-    (d) => Number(score) >= Number(d.minMark) && Number(score) <= Number(d.maxMark)
+
+  const n = Number(score);
+  if (!Number.isFinite(n)) return "—";
+
+  const sorted = [...(descriptors || [])].sort(
+    (a, b) => Number(a.minMark) - Number(b.minMark)
   );
-  return found?.grade || "—";
+
+  const epsilon = 0.01;
+  const found = sorted.find(
+    (d) => n + epsilon >= Number(d.minMark) && n - epsilon <= Number(d.maxMark)
+  );
+
+  if (found?.grade) return found.grade;
+
+  if (sorted.length > 0) {
+    if (n < Number(sorted[0].minMark)) return sorted[0].grade || "—";
+    if (n > Number(sorted[sorted.length - 1].maxMark)) {
+      return sorted[sorted.length - 1].grade || "—";
+    }
+  }
+
+  return "—";
 }
 
 function normalizeSubjectName(name: string) {
@@ -293,9 +320,39 @@ function isTemporarySubsidiarySubject(subjectName: string) {
   const n = normalizeSubjectName(subjectName);
   return (
     n === "GENERAL PAPER" ||
+    n === "GP" ||
     n === "SUBSIDIARY MATHEMATICS" ||
-    n === "INFORMATION AND COMMUNICATION TECHNOLOGY"
+    n === "SUBSIDIARY MATH" ||
+    n === "SUB MATH" ||
+    n === "SUB MATHS" ||
+    n === "INFORMATION AND COMMUNICATION TECHNOLOGY" ||
+    n === "ICT"
   );
+}
+
+function gradeSubjectScore(subjectName: string, score: number | null, descriptors: GradeDescriptorRow[]) {
+  if (isTemporarySubsidiarySubject(subjectName)) {
+    if (score === null) return "—";
+    return Number(score) >= 50 ? "O" : "F";
+  }
+
+  return gradeScore(score, descriptors);
+}
+
+function roundHalfUpToWhole(value: number | null | undefined) {
+  if (value === null || value === undefined) return null;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return Math.round(n + 1e-6);
+}
+
+function formatPdfMark(value: number | null, reportType: ReportType) {
+  if (value === null || Number.isNaN(Number(value))) return "—";
+  if (reportType === "O_EOT" || reportType === "A_EOT") {
+    const rounded = roundHalfUpToWhole(value);
+    return rounded === null ? "—" : String(rounded);
+  }
+  return formatMark(value);
 }
 
 function getALevelPoints(subjectName: string, grade: string) {
@@ -350,7 +407,19 @@ function getReportHeading(reportType: string, termName: string, academicYearName
   return `ACADEMIC REPORT CARD ${year}`;
 }
 
-function toShortAssessmentLabel(label: string, index: number) {
+function toShortAssessmentLabel(label: string, index: number, reportType?: ReportType) {
+  if (reportType === "A_EOT") {
+    if (index === 0) return "MOT";
+    if (index === 1) return "EOT";
+    if (index === 2) return "EXAM";
+  }
+
+  if (reportType === "O_EOT") {
+    if (index === 0) return "CA 1";
+    if (index === 1) return "CA 2";
+    if (index === 2) return "EXAM";
+  }
+
   const clean = String(label || "").trim().toUpperCase();
 
   const caMatch = clean.match(/CA\s*([0-9]+)/i);
@@ -404,16 +473,6 @@ function paperDisplayName(paper: { name?: string | null; code?: string | null })
   const code = String(paper.code || "").trim();
   const name = String(paper.name || "").trim();
   return code || name || "Paper";
-}
-
-function getStudentProfileImageUrl(student: StudentApiRow) {
-  return (
-    student.profilePictureUrl ||
-    student.photoUrl ||
-    student.imageUrl ||
-    student.passportPhotoUrl ||
-    DEFAULT_STUDENT_PROFILE_URL
-  );
 }
 
 async function blobToDataUrl(blob: Blob): Promise<string> {
@@ -470,12 +529,8 @@ async function loadPdfImage(url: string, alias: string): Promise<LoadedPdfImage 
     if (!res.ok) return null;
 
     const blob = await res.blob();
-    const contentType = String(blob.type || "").toLowerCase();
-    const isPng =
-      contentType.includes("png") ||
-      String(url || "").toLowerCase().split("?")[0].endsWith(".png");
 
-    if (isPng) {
+    if (alias === "badge") {
       const dataUrl = await blobToDataUrl(blob);
       const size = await new Promise<{ width: number; height: number }>((resolve, reject) => {
         const img = new window.Image();
@@ -516,28 +571,20 @@ async function buildStudentReportPayload(params: {
   const { studentId, yearId, termId, reportType } = params;
   const isALevelReport = reportType === "A_MID" || reportType === "A_EOT";
 
-  const [studentRes, schemeRes, yearsRes] = await Promise.all([
-    fetch(`/api/students/${encodeURIComponent(studentId)}`, {
+  const [studentData, schemeData, yearsData] = await Promise.all([
+    fetchJsonSafely(`/api/students/${encodeURIComponent(studentId)}`, {
       cache: "no-store",
       credentials: "include",
-    }),
-    fetch(`/api/schemes?reportType=${encodeURIComponent(reportType)}`, {
+    }, "Failed to load student"),
+    fetchJsonSafely(`/api/schemes?reportType=${encodeURIComponent(reportType)}`, {
       cache: "no-store",
       credentials: "include",
-    }),
-    fetch(`/api/academic-years`, {
+    }, "Failed to load report scheme"),
+    fetchJsonSafely(`/api/academic-years`, {
       cache: "no-store",
       credentials: "include",
-    }),
+    }, "Failed to load academic years"),
   ]);
-
-  const studentData = await studentRes.json();
-  const schemeData = await schemeRes.json();
-  const yearsData = await yearsRes.json();
-
-  if (!studentRes.ok) throw new Error(studentData?.error || "Failed to load student");
-  if (!schemeRes.ok) throw new Error(schemeData?.error || "Failed to load report scheme");
-  if (!yearsRes.ok) throw new Error(yearsData?.error || "Failed to load academic years");
 
   const loadedStudent: StudentApiRow | null = studentData?.student ?? null;
   if (!loadedStudent) throw new Error("Student not found.");
@@ -558,9 +605,6 @@ async function buildStudentReportPayload(params: {
   }
 
   const enrolledSubjects = Array.from(enrolledSubjectsMap.values());
-  if (enrolledSubjects.length === 0) {
-    throw new Error("This student has no enrolled subjects.");
-  }
 
   const loadedScheme: SchemeApiRow = {
     ...schemeData,
@@ -587,12 +631,11 @@ async function buildStudentReportPayload(params: {
     (y: AcademicYearRow) => y.id === yearId
   );
 
-  const termsRes = await fetch(
+  const termsData = await fetchJsonSafely(
     `/api/terms?academicYearId=${encodeURIComponent(yearId)}`,
-    { cache: "no-store", credentials: "include" }
+    { cache: "no-store", credentials: "include" },
+    "Failed to load terms"
   );
-  const termsData = await termsRes.json();
-  if (!termsRes.ok) throw new Error(termsData?.error || "Failed to load terms");
 
   const foundTerm = (Array.isArray(termsData) ? termsData : []).find(
     (t: TermRow) => t.id === termId
@@ -603,13 +646,14 @@ async function buildStudentReportPayload(params: {
   });
   if (activeEnrollment.streamId) metaParams.set("streamId", activeEnrollment.streamId);
 
-  const metaRes = await fetch(`/api/report-card-meta?${metaParams.toString()}`, {
-    cache: "no-store",
-    credentials: "include",
-  });
-  const metaData = await metaRes.json();
-  if (!metaRes.ok) {
-    throw new Error(metaData?.error || "Failed to load report metadata");
+  let metaData: any = {};
+  try {
+    metaData = await fetchJsonSafely(`/api/report-card-meta?${metaParams.toString()}`, {
+      cache: "no-store",
+      credentials: "include",
+    }, "Failed to load report metadata");
+  } catch (err) {
+    console.warn("Report metadata could not be loaded; continuing with blank teacher initials.", err);
   }
 
   const teacherMap: Record<string, string> = metaData?.subjectTeachers || {};
@@ -633,14 +677,19 @@ async function buildStudentReportPayload(params: {
       params.set("subjectPaperId", subjectPaperId);
     }
 
-    const marksRes = await fetch(`/api/marks?${params.toString()}`, {
-      cache: "no-store",
-      credentials: "include",
-    });
-    const marksData = await marksRes.json();
-
-    if (!marksRes.ok) {
-      throw new Error(marksData?.error || `Failed to load marks for subject ${subjectId}`);
+    let marksData: any[] = [];
+    try {
+      marksData = await fetchJsonSafely(`/api/marks?${params.toString()}`, {
+        cache: "no-store",
+        credentials: "include",
+      }, `Failed to load marks for subject ${subjectId}`);
+    } catch (err) {
+      console.warn("Marks could not be loaded; using blank score.", {
+        studentId,
+        subjectId,
+        subjectPaperId,
+        err,
+      });
     }
 
     const studentMark = Array.isArray(marksData)
@@ -659,7 +708,7 @@ async function buildStudentReportPayload(params: {
     return {
       assessmentId: component.assessmentId,
       label: component.label,
-      shortLabel: toShortAssessmentLabel(component.label, index),
+      shortLabel: toShortAssessmentLabel(component.label, index, reportType),
       enterOutOf,
       weightOutOf,
       rawScore,
@@ -669,17 +718,22 @@ async function buildStudentReportPayload(params: {
 
   for (const subject of enrolledSubjects) {
     if (isALevelReport) {
-      const papersRes = await fetch(
-        `/api/subjects/${encodeURIComponent(subject.subjectId)}/papers`,
-        {
-          cache: "no-store",
-          credentials: "include",
-        }
-      );
-      const papersData = await papersRes.json();
-
-      if (!papersRes.ok) {
-        throw new Error(papersData?.error || `Failed to load papers for ${subject.subjectName}`);
+      let papersData: any[] = [];
+      try {
+        papersData = await fetchJsonSafely(
+          `/api/subjects/${encodeURIComponent(subject.subjectId)}/papers`,
+          {
+            cache: "no-store",
+            credentials: "include",
+          },
+          `Failed to load papers for ${subject.subjectName}`
+        );
+      } catch (err) {
+        console.warn("Subject papers could not be loaded; treating subject as non-paper-based.", {
+          studentId,
+          subjectId: subject.subjectId,
+          err,
+        });
       }
 
       const subjectPapers: SubjectPaperApiRow[] = Array.isArray(papersData) ? papersData : [];
@@ -705,9 +759,6 @@ async function buildStudentReportPayload(params: {
           })
         );
 
-        // A-Level EOT subject total must match the visible paper totals.
-        // So we round each paper total first, average the rounded paper totals,
-        // then round the final subject total to a whole number.
         const subjectTotalRaw =
           reportType === "A_EOT"
             ? averageRawNumbers(paperRows.map((p) => roundHalfUpToWhole(p.total)))
@@ -720,7 +771,8 @@ async function buildStudentReportPayload(params: {
             ? null
             : round2(subjectTotalRaw);
 
-        const subjectGrade = gradeScore(
+        const subjectGrade = gradeSubjectScore(
+          subject.subjectName,
           subjectTotal,
           loadedScheme.gradeDescriptors || DEFAULT_O_LEVEL_DESCRIPTORS
         );
@@ -747,14 +799,18 @@ async function buildStudentReportPayload(params: {
     );
 
     const totalRaw = sumNumbers(componentScores.map((c) => c.weightedScore));
-    const total = reportType === "A_EOT" ? roundHalfUpToWhole(totalRaw) : totalRaw;
+    const total = reportType === "A_EOT" && totalRaw !== null ? roundHalfUpToWhole(totalRaw) : totalRaw;
 
     provisionalRows.push({
       subjectId: subject.subjectId,
       subjectName: subject.subjectName,
       componentScores,
       total,
-      grade: gradeScore(total, loadedScheme.gradeDescriptors || DEFAULT_O_LEVEL_DESCRIPTORS),
+      grade: gradeSubjectScore(
+        subject.subjectName,
+        total,
+        loadedScheme.gradeDescriptors || DEFAULT_O_LEVEL_DESCRIPTORS
+      ),
       teacherInitials: teacherMap[subject.subjectId] || "—",
       papers: [],
       isPaperBased: false,
@@ -831,7 +887,6 @@ function renderStudentReportPage(
   assets: {
     badgeImage: LoadedPdfImage | null;
     signatureImage: LoadedPdfImage | null;
-    profileImage?: LoadedPdfImage | null;
   },
   isFirstPage: boolean
 ) {
@@ -851,7 +906,7 @@ function renderStudentReportPage(
 
   const isALevelReport = reportType === "A_MID" || reportType === "A_EOT";
   const fullName = [student.firstName, student.otherNames, student.lastName]
-    .map((part) => String(part || "").trim())
+    .map((x) => String(x || "").trim())
     .filter(Boolean)
     .join(" ");
   const studentNo = student.admissionNo || student.studentNo || "No admission number";
@@ -885,7 +940,7 @@ function renderStudentReportPage(
 
   const badgeImage = assets.badgeImage;
   const signatureImage = assets.signatureImage;
-  const profileImage = assets.profileImage || null;
+  void signatureImage;
 
   const left = 6.2;
   const usableWidth = 197.6;
@@ -908,19 +963,14 @@ function renderStudentReportPage(
   const loosenFactor = tightPdf ? 0 : compactPdf ? 0.04 : 0.12;
 
   const COLORS = {
-    bodyText: [30, 41, 59] as [number, number, number],
-    headerText: [17, 50, 83] as [number, number, number],
-    mutedText: [71, 85, 105] as [number, number, number],
-    border: [176, 190, 205] as [number, number, number],
-    slateFill: [250, 252, 247] as [number, number, number],
-    headerFill: [255, 253, 247] as [number, number, number],
-    imageBoxFill: [246, 249, 244] as [number, number, number],
-    primaryDark: [25, 77, 112] as [number, number, number],
-    primarySoft: [225, 240, 249] as [number, number, number],
-    secondaryDark: [28, 116, 88] as [number, number, number],
-    secondarySoft: [224, 243, 234] as [number, number, number],
-    accentDark: [178, 82, 49] as [number, number, number],
-    accentSoft: [255, 240, 224] as [number, number, number],
+    border: [203, 213, 225] as [number, number, number],
+    slateFill: [248, 250, 252] as [number, number, number],
+    primaryDark: [79, 70, 229] as [number, number, number],
+    primarySoft: [224, 231, 255] as [number, number, number],
+    secondaryDark: [13, 148, 136] as [number, number, number],
+    secondarySoft: [204, 251, 241] as [number, number, number],
+    accentDark: [217, 119, 6] as [number, number, number],
+    accentSoft: [254, 243, 199] as [number, number, number],
   };
 
   const drawText = (
@@ -936,10 +986,10 @@ function renderStudentReportPage(
   ) => {
     pdf.setFont("helvetica", opts?.style || "normal");
     pdf.setFontSize(opts?.size || 10);
-    const color = opts?.color || COLORS.bodyText;
+    const color = opts?.color || [15, 23, 42];
     pdf.setTextColor(color[0], color[1], color[2]);
     pdf.text(text, x, yy, { align: opts?.align || "left" });
-    pdf.setTextColor(COLORS.bodyText[0], COLORS.bodyText[1], COLORS.bodyText[2]);
+    pdf.setTextColor(15, 23, 42);
   };
 
   const drawBox = (
@@ -950,23 +1000,12 @@ function renderStudentReportPage(
     fillRgb?: [number, number, number],
     radius = 1.2
   ) => {
-    const squareCorners = radius <= 0;
-
     if (fillRgb) {
       pdf.setFillColor(fillRgb[0], fillRgb[1], fillRgb[2]);
-      if (squareCorners) {
-        pdf.rect(x, yy, w, h, "F");
-      } else {
-        pdf.roundedRect(x, yy, w, h, radius, radius, "F");
-      }
+      pdf.roundedRect(x, yy, w, h, radius, radius, "F");
     }
-
     pdf.setDrawColor(COLORS.border[0], COLORS.border[1], COLORS.border[2]);
-    if (squareCorners) {
-      pdf.rect(x, yy, w, h);
-    } else {
-      pdf.roundedRect(x, yy, w, h, radius, radius);
-    }
+    pdf.roundedRect(x, yy, w, h, radius, radius);
   };
 
   const estimateCellHeight = (
@@ -1016,7 +1055,7 @@ function renderStudentReportPage(
     pdf.setFont("helvetica", opts?.bold ? "bold" : "normal");
     pdf.setFontSize(fontSize);
 
-    const textColor = opts?.textColor || COLORS.bodyText;
+    const textColor = opts?.textColor || [15, 23, 42];
     pdf.setTextColor(textColor[0], textColor[1], textColor[2]);
 
     const align = opts?.align || "left";
@@ -1036,7 +1075,7 @@ function renderStudentReportPage(
       pdf.text(line, tx, startY + idx * lineHeight, { align });
     });
 
-    pdf.setTextColor(COLORS.bodyText[0], COLORS.bodyText[1], COLORS.bodyText[2]);
+    pdf.setTextColor(15, 23, 42);
   };
 
   const drawImageFit = (
@@ -1080,63 +1119,38 @@ function renderStudentReportPage(
   const headerBandH = tightPdf ? 5.0 : compactPdf ? 5.5 : 6.5;
 
   const outerPad = tightPdf ? 1.4 : 1.6;
-  const sideSlotW = tightPdf ? 35 : compactPdf ? 39 : 43;
-  const sideBoxW = sideSlotW - 1.2;
-  const sideBoxH = headerH - 3.2;
-  const sideBoxY = y + 1.2;
+  const badgeSlotW = badgeImage ? (tightPdf ? 38 : compactPdf ? 41 : 45) : 0;
+  const badgeBoxW = badgeImage ? badgeSlotW - 1.0 : 0;
+  const badgeBoxH = badgeImage ? headerH - 3.2 : 0;
+  const badgeGap = badgeImage ? 2.8 : 0;
 
-  drawBox(left, y, usableWidth, headerH, COLORS.headerFill, 2.2);
+  drawBox(left, y, usableWidth, headerH, [255, 255, 255], 2.2);
 
   if (badgeImage) {
     const badgeBoxX = left + outerPad;
-    drawBox(
-      badgeBoxX,
-      sideBoxY,
-      sideBoxW,
-      sideBoxH,
-      badgeImage.format === "PNG" ? undefined : COLORS.imageBoxFill,
-      1.2
-    );
+    const badgeBoxY = y + 1.2;
+    drawBox(badgeBoxX, badgeBoxY, badgeBoxW, badgeBoxH, [248, 250, 252], 1.8);
     drawImageFit(
       badgeImage,
       badgeBoxX + 0.3,
-      sideBoxY + 0.3,
-      sideBoxW - 0.6,
-      sideBoxH - 0.6
+      badgeBoxY + 0.3,
+      badgeBoxW - 0.6,
+      badgeBoxH - 0.6
     );
   }
 
-  if (profileImage) {
-    const profileBoxX = left + usableWidth - outerPad - sideBoxW;
-    drawBox(
-      profileBoxX,
-      sideBoxY,
-      sideBoxW,
-      sideBoxH,
-      profileImage.format === "PNG" ? undefined : COLORS.imageBoxFill,
-      1.2
-    );
-    drawImageFit(
-      profileImage,
-      profileBoxX + 0.3,
-      sideBoxY + 0.3,
-      sideBoxW - 0.6,
-      sideBoxH - 0.6
-    );
-  }
-
-  const contentCenterX = left + usableWidth / 2;
+  const contentLeft = left + (badgeImage ? badgeSlotW + badgeGap : 0);
+  const contentWidth = usableWidth - (badgeImage ? badgeSlotW + badgeGap : 0);
+  const contentCenterX = contentLeft + contentWidth / 2;
 
   drawText(SCHOOL_NAME, contentCenterX, y + (tightPdf ? 6.1 : compactPdf ? 6.9 : 7.8), {
     size: tightPdf ? 14 : compactPdf ? 15.2 : 16.8,
     style: "bold",
     align: "center",
-    color: COLORS.headerText,
   });
   drawText(SCHOOL_MOTTO, contentCenterX, y + (tightPdf ? 9.9 : compactPdf ? 10.9 : 12.5), {
     size: tightPdf ? 7.6 : compactPdf ? 8.2 : 9.0,
     align: "center",
-    color: COLORS.secondaryDark,
   });
   drawText(
     `${SCHOOL_ADDRESS} • ${SCHOOL_CONTACT}`,
@@ -1145,12 +1159,11 @@ function renderStudentReportPage(
     {
       size: tightPdf ? 6.7 : compactPdf ? 7.2 : 8.0,
       align: "center",
-      color: COLORS.mutedText,
     }
   );
 
-  const bandX = left + sideSlotW + (tightPdf ? 7 : compactPdf ? 8 : 10);
-  const bandW = usableWidth - 2 * sideSlotW - (tightPdf ? 14 : compactPdf ? 16 : 20);
+  const bandX = contentLeft + (tightPdf ? 7 : compactPdf ? 8 : 10);
+  const bandW = contentWidth - (tightPdf ? 14 : compactPdf ? 16 : 20);
   drawBox(
     bandX,
     y + headerH - headerBandH - 1.5,
@@ -1201,7 +1214,7 @@ function renderStudentReportPage(
     const labelWidth = pdf.getTextWidth(labelText);
     pdf.setFont("helvetica", "normal");
     pdf.setFontSize(tightPdf ? 6.8 : compactPdf ? 7.1 : 7.7);
-    pdf.setTextColor(COLORS.bodyText[0], COLORS.bodyText[1], COLORS.bodyText[2]);
+    pdf.setTextColor(15, 23, 42);
     pdf.text(String(value || "—"), x + 2 + labelWidth + 1.2, yy + h / 2 + 1.1);
   };
 
@@ -1440,12 +1453,7 @@ function renderStudentReportPage(
   const tableWidth =
     subjectW + paperW + componentCount * componentW + totalW + gradeW + commentW + initialsW;
 
-  // Keep the Subject Achievement Level table exactly aligned with the other PDF tables.
-  // Any tiny width difference is absorbed into the comment column instead of centering
-  // a slightly wider/narrower table.
-  const tableLeft = left;
-  const tableWidthDelta = usableWidth - tableWidth;
-  commentW += tableWidthDelta;
+  const tableLeft = left + (usableWidth - tableWidth) / 2;
 
   let x = tableLeft;
   const subjectHeadH = tightPdf ? 6.4 : compactPdf ? 7.0 : 8.6;
@@ -1472,9 +1480,8 @@ function renderStudentReportPage(
   for (let i = 0; i < scheme.components.length; i++) {
     const component = scheme.components[i];
     drawCell(
-      `${toShortAssessmentLabel(component.label, i)}\n(Out of ${formatPdfMark(
-        component.weightOutOf,
-        reportType
+      `${toShortAssessmentLabel(component.label, i, reportType)}\n(Out of ${formatMark(
+        component.weightOutOf
       )})`,
       x,
       y,
@@ -1724,116 +1731,142 @@ function renderStudentReportPage(
   y += tightPdf ? 1.8 : compactPdf ? 2.4 : 3.8;
 
   const headCommentText = headTeacherComment || "—";
-
-  const remainingHeight = Math.max(pageBottom - y, 18);
+  const remainingHeight = Math.max(pageBottom - y, 28);
 
   const base = {
-    blockTitleH: tightPdf ? 4.8 : compactPdf ? 5.3 : 6.4,
-    gdHeaderH: tightPdf ? 5.2 : compactPdf ? 5.8 : 6.7,
-    gdRowH: tightPdf ? 6.5 : compactPdf ? 7.2 : 8.6,
-    titleTableGap: tightPdf ? 0.7 : compactPdf ? 0.8 : 1.0,
-    betweenBlocks: tightPdf ? 1.5 : compactPdf ? 1.8 : 2.4,
-    commentMinH: tightPdf ? 7.8 : compactPdf ? 8.8 : 10.6,
-    afterCommentGap: tightPdf ? 1.1 : compactPdf ? 1.4 : 2.1,
-    signatureH: signatureImage ? (tightPdf ? 7.2 : compactPdf ? 8.3 : 10.0) : 4.8,
-    labelFont: tightPdf ? 5.8 : compactPdf ? 6.2 : 7.1,
+    blockTitleH: tightPdf ? 4.9 : compactPdf ? 5.4 : 6.5,
+    gdHeaderH: tightPdf ? 4.9 : compactPdf ? 5.4 : 6.2,
+    gdRowH: tightPdf ? 5.0 : compactPdf ? 5.6 : 6.8,
+    betweenBlocks: tightPdf ? 1.9 : compactPdf ? 2.2 : 2.8,
+    commentMinH: tightPdf ? 6.4 : compactPdf ? 7.2 : 8.8,
+    afterCommentGap: tightPdf ? 2.0 : compactPdf ? 2.3 : 3.2,
+    signatureH: signatureImage ? (tightPdf ? 8.7 : compactPdf ? 9.8 : 12.0) : 5.8,
+    labelFont: tightPdf ? 6.0 : compactPdf ? 6.4 : 7.4,
   };
-
-  const desiredCommentFont = tightPdf ? 6.3 : compactPdf ? 6.8 : 7.8;
-  const desiredGdFont = tightPdf ? 9 : compactPdf ? 9 : 9;
-  const desiredGdDescriptorFont = tightPdf ? 9 : compactPdf ? 9 : 9;
-  const desiredGdLineHeight = tightPdf ? 2.8 : compactPdf ? 3.05 : 3.4;
 
   const baseCommentContentH = Math.max(
     base.commentMinH,
     estimateCellHeight(
       headCommentText,
       usableWidth,
-      desiredCommentFont,
-      tightPdf ? 2.9 : compactPdf ? 3.1 : 3.45,
+      tightPdf ? 5.2 : compactPdf ? 5.6 : 6.6,
+      tightPdf ? 2.4 : 2.7,
       4
     )
   );
 
   const baseBottomNeeded =
     base.blockTitleH +
-    base.titleTableGap +
     base.gdHeaderH +
     gradeDescriptors.length * base.gdRowH +
     base.betweenBlocks +
     base.blockTitleH +
-    base.titleTableGap +
     baseCommentContentH +
     base.afterCommentGap +
     base.signatureH;
 
   let bottomScale = 1;
   if (baseBottomNeeded > remainingHeight) {
-    bottomScale = Math.max(0.42, remainingHeight / baseBottomNeeded);
+    bottomScale = Math.max(0.72, remainingHeight / baseBottomNeeded);
   }
 
   const sc = (n: number) => Math.max(0.1, round2(n * bottomScale) || n * bottomScale);
-  const veryTightBottom = bottomScale < 0.78;
 
   const bottomTitleH = sc(base.blockTitleH);
-  const gdHeaderH = veryTightBottom
-    ? sc(base.gdHeaderH)
-    : Math.max(sc(base.gdHeaderH), tightPdf ? 4.7 : compactPdf ? 5.1 : 5.7);
-  const gdRowH = veryTightBottom
-    ? sc(base.gdRowH)
-    : Math.max(sc(base.gdRowH), tightPdf ? 5.2 : compactPdf ? 5.6 : 6.4);
-  const titleTableGap = sc(base.titleTableGap);
+  const gdHeaderH = sc(base.gdHeaderH);
+  const gdRowH = sc(base.gdRowH);
   const betweenBlocks = sc(base.betweenBlocks);
-  const commentFont = veryTightBottom
-    ? Math.max(5.2, sc(desiredCommentFont))
-    : Math.max(tightPdf ? 5.8 : compactPdf ? 6.2 : 7.0, sc(desiredCommentFont));
-  const gdFont = veryTightBottom
-    ? Math.max(4.8, sc(desiredGdFont))
-    : Math.max(tightPdf ? 5.3 : compactPdf ? 5.7 : 6.3, sc(desiredGdFont));
-  const gdDescriptorFont = veryTightBottom
-    ? Math.max(4.6, sc(desiredGdDescriptorFont))
-    : Math.max(tightPdf ? 5.0 : compactPdf ? 5.4 : 6.0, sc(desiredGdDescriptorFont));
-  const gdLineHeight = veryTightBottom
-    ? Math.max(2.05, sc(desiredGdLineHeight))
-    : Math.max(tightPdf ? 2.25 : compactPdf ? 2.45 : 2.75, sc(desiredGdLineHeight));
+  const commentFont = Math.max(4.8, sc(tightPdf ? 5.2 : compactPdf ? 5.6 : 6.6));
+  const gdFont = Math.max(4.8, sc(tightPdf ? 5.0 : compactPdf ? 5.4 : 6.4));
   const commentContentH = Math.max(sc(base.commentMinH), sc(baseCommentContentH));
   const afterCommentGap = sc(base.afterCommentGap);
-  const sigLabelFont = Math.max(4.8, sc(base.labelFont));
+  const sigLabelFont = Math.max(5.0, sc(base.labelFont));
 
   const gd1 = tightPdf ? 12 : compactPdf ? 13 : 16;
   const gd2 = tightPdf ? 25 : compactPdf ? 28 : 36;
   const gd3 = tightPdf ? 18 : compactPdf ? 20 : 25;
   const gd4 = usableWidth - (gd1 + gd2 + gd3);
 
-  drawBox(left, y, usableWidth, bottomTitleH, COLORS.accentDark, 0);
+  drawBox(left, y, usableWidth, bottomTitleH, COLORS.accentDark, 1.2);
   drawText("GRADE DESCRIPTOR TABLE", left + 2, y + bottomTitleH - 1.2, {
     size: Math.max(5.8, sc(tightPdf ? 6.8 : compactPdf ? 7.2 : 8.0)),
     style: "bold",
     color: [255, 255, 255],
   });
-  y += bottomTitleH + titleTableGap;
+  y += bottomTitleH;
 
-  drawCell("Grade", left, y, gd1, gdHeaderH, { bold: true, fill: true, fillColor: COLORS.accentSoft, size: gdFont });
-  drawCell("Achievement Level", left + gd1, y, gd2, gdHeaderH, { bold: true, fill: true, fillColor: COLORS.accentSoft, size: gdFont });
-  drawCell("Marks", left + gd1 + gd2, y, gd3, gdHeaderH, { bold: true, fill: true, fillColor: COLORS.accentSoft, size: gdFont });
-  drawCell("Descriptor", left + gd1 + gd2 + gd3, y, gd4, gdHeaderH, { bold: true, fill: true, fillColor: COLORS.accentSoft, size: gdFont });
+  drawCell("Grade", left, y, gd1, gdHeaderH, {
+    bold: true,
+    fill: true,
+    fillColor: COLORS.accentSoft,
+    size: gdFont,
+  });
+  drawCell("Achievement Level", left + gd1, y, gd2, gdHeaderH, {
+    bold: true,
+    fill: true,
+    fillColor: COLORS.accentSoft,
+    size: gdFont,
+  });
+  drawCell("Marks", left + gd1 + gd2, y, gd3, gdHeaderH, {
+    bold: true,
+    fill: true,
+    fillColor: COLORS.accentSoft,
+    size: gdFont,
+  });
+  drawCell("Descriptor", left + gd1 + gd2 + gd3, y, gd4, gdHeaderH, {
+    bold: true,
+    fill: true,
+    fillColor: COLORS.accentSoft,
+    size: gdFont,
+  });
   y += gdHeaderH;
 
   for (const g of gradeDescriptors) {
-    drawCell(g.grade, left, y, gd1, gdRowH, { align: "center", bold: true, size: gdFont, valign: "middle" });
-    drawCell(g.achievementLevel, left + gd1, y, gd2, gdRowH, { size: gdFont, valign: "middle" });
-    drawCell(`${formatMark(g.minMark)} - ${formatMark(g.maxMark)}`, left + gd1 + gd2, y, gd3, gdRowH, { align: "center", size: gdFont, valign: "middle" });
-    drawCell(g.descriptor, left + gd1 + gd2 + gd3, y, gd4, gdRowH, { size: gdDescriptorFont, valign: "middle", lineHeight: gdLineHeight });
+    drawCell(g.grade, left, y, gd1, gdRowH, {
+      align: "center",
+      bold: true,
+      size: gdFont,
+      valign: "middle",
+    });
+    drawCell(g.achievementLevel, left + gd1, y, gd2, gdRowH, {
+      size: Math.max(4.7, gdFont - 0.2),
+      valign: "middle",
+    });
+    drawCell(
+      `${formatMark(g.minMark)} - ${formatMark(g.maxMark)}`,
+      left + gd1 + gd2,
+      y,
+      gd3,
+      gdRowH,
+      {
+        align: "center",
+        size: Math.max(4.7, gdFont - 0.2),
+        valign: "middle",
+      }
+    );
+    drawCell(g.descriptor, left + gd1 + gd2 + gd3, y, gd4, gdRowH, {
+      size: Math.max(4.5, gdFont - 0.5),
+      valign: "middle",
+      lineHeight: Math.max(2.0, sc(2.5)),
+    });
     y += gdRowH;
   }
 
   y += betweenBlocks;
 
-  drawBox(left, y, usableWidth, bottomTitleH, COLORS.primaryDark, 0);
-  drawText("HEAD TEACHER'S COMMENT", left + 2, y + bottomTitleH - 1.2, { size: Math.max(5.8, sc(tightPdf ? 6.8 : compactPdf ? 7.2 : 8.0)), style: "bold", color: [255, 255, 255] });
-  y += bottomTitleH + titleTableGap;
+  drawBox(left, y, usableWidth, bottomTitleH, COLORS.primaryDark, 1.2);
+  drawText("HEAD TEACHER'S COMMENT", left + 2, y + bottomTitleH - 1.2, {
+    size: Math.max(5.8, sc(tightPdf ? 6.8 : compactPdf ? 7.2 : 8.0)),
+    style: "bold",
+    color: [255, 255, 255],
+  });
+  y += bottomTitleH;
 
-  drawCell(headCommentText, left, y, usableWidth, commentContentH, { size: commentFont, valign: "middle", lineHeight: Math.max(2.4, sc(tightPdf ? 2.8 : compactPdf ? 3.0 : 3.3)) });
+  drawCell(headCommentText, left, y, usableWidth, commentContentH, {
+    size: commentFont,
+    valign: "middle",
+    lineHeight: Math.max(2.0, sc(2.5)),
+  });
   y += commentContentH + afterCommentGap;
 
   const signatureY = y;
@@ -1842,17 +1875,29 @@ function renderStudentReportPage(
   const classSigX = left + 4;
   const headSigX = classSigX + sigColW + sigGap;
 
-  // Signature image intentionally disabled so the head teacher can sign manually.
+  // Signature image intentionally disabled so the Head Teacher can sign manually.
   // if (signatureImage) {
-  //   const sigMaxW = Math.max(39, sc(tightPdf ? 69 : compactPdf ? 78 : 90));
-  //   const sigMaxH = Math.max(12.75, sc(tightPdf ? 15.75 : compactPdf ? 18.0 : 21.75));
-  //   drawImageFit(signatureImage, headSigX + 1, signatureY - sigMaxH + 7.5, sigMaxW, sigMaxH);
+  //   const sigMaxW = Math.max(20, sc(tightPdf ? 35 : compactPdf ? 39 : 45));
+  //   const sigMaxH = Math.max(6, sc(tightPdf ? 7.5 : compactPdf ? 8.5 : 10.5));
+  //   drawImageFit(
+  //     signatureImage,
+  //     headSigX + 11,
+  //     signatureY - sigMaxH + 10,
+  //     sigMaxW,
+  //     sigMaxH
+  //   );
   // }
 
-  drawText("Class Teacher Signature:", classSigX, signatureY + 1.2, { size: sigLabelFont, color: COLORS.primaryDark });
-  drawText("Head Teacher Signature:", headSigX, signatureY + 1.2, { size: sigLabelFont, color: COLORS.primaryDark });
+  drawText("Class Teacher Signature:", classSigX, signatureY + 1.2, {
+    size: sigLabelFont,
+    color: COLORS.primaryDark,
+  });
+  drawText("Head Teacher Signature:", headSigX, signatureY + 1.2, {
+    size: sigLabelFont,
+    color: COLORS.primaryDark,
+  });
 
-  pdf.setDrawColor(COLORS.border[0], COLORS.border[1], COLORS.border[2]);
+  pdf.setDrawColor(148, 163, 184);
   pdf.line(classSigX + 32, signatureY + 0.9, classSigX + sigColW, signatureY + 0.9);
 }
 
@@ -1899,16 +1944,10 @@ export default function ReportCardsPage() {
         setBootLoading(true);
         setBootError("");
 
-        const [yearsRes, classesRes] = await Promise.all([
-          fetch("/api/academic-years", { cache: "no-store", credentials: "include" }),
-          fetch("/api/classes", { cache: "no-store", credentials: "include" }),
+        const [yearsData, classesData] = await Promise.all([
+          fetchJsonSafely("/api/academic-years", { cache: "no-store", credentials: "include" }, "Failed to load academic years"),
+          fetchJsonSafely("/api/classes", { cache: "no-store", credentials: "include" }, "Failed to load classes"),
         ]);
-
-        const yearsData = await yearsRes.json();
-        const classesData = await classesRes.json();
-
-        if (!yearsRes.ok) throw new Error(yearsData?.error || "Failed to load academic years");
-        if (!classesRes.ok) throw new Error(classesData?.error || "Failed to load classes");
 
         const loadedYears: AcademicYearRow[] = Array.isArray(yearsData) ? yearsData : [];
         const loadedClasses: ClassRow[] = Array.isArray(classesData) ? classesData : [];
@@ -1917,12 +1956,11 @@ export default function ReportCardsPage() {
 
         let loadedTerms: TermRow[] = [];
         if (currentYear?.id) {
-          const termsRes = await fetch(
+          const termsData = await fetchJsonSafely(
             `/api/terms?academicYearId=${encodeURIComponent(currentYear.id)}`,
-            { cache: "no-store", credentials: "include" }
+            { cache: "no-store", credentials: "include" },
+            "Failed to load terms"
           );
-          const termsData = await termsRes.json();
-          if (!termsRes.ok) throw new Error(termsData?.error || "Failed to load terms");
           loadedTerms = Array.isArray(termsData) ? termsData : [];
         }
 
@@ -1961,13 +1999,11 @@ export default function ReportCardsPage() {
 
     async function loadTerms() {
       try {
-        const res = await fetch(
+        const data = await fetchJsonSafely(
           `/api/terms?academicYearId=${encodeURIComponent(yearId)}`,
-          { cache: "no-store", credentials: "include" }
+          { cache: "no-store", credentials: "include" },
+          "Failed to load terms"
         );
-        const data = await res.json();
-
-        if (!res.ok) throw new Error(data?.error || "Failed to load terms");
 
         const loadedTerms: TermRow[] = Array.isArray(data) ? data : [];
         const nextTerm =
@@ -2016,13 +2052,10 @@ export default function ReportCardsPage() {
         params.set("pageSize", "30");
         if (query.trim()) params.set("q", query.trim());
 
-        const res = await fetch(`/api/students?${params.toString()}`, {
+        const data = await fetchJsonSafely<StudentsResponse>(`/api/students?${params.toString()}`, {
           cache: "no-store",
           credentials: "include",
-        });
-        const data = await res.json();
-
-        if (!res.ok) throw new Error(data?.error || "Failed to load students");
+        }, "Failed to load students");
 
         if (!cancelled) {
           const items = studentsFromResponse(data);
@@ -2070,15 +2103,10 @@ export default function ReportCardsPage() {
       params.set("pageSize", "500");
       if (query.trim()) params.set("q", query.trim());
 
-      const res = await fetch(`/api/students?${params.toString()}`, {
+      const data = await fetchJsonSafely<StudentsResponse>(`/api/students?${params.toString()}`, {
         cache: "no-store",
         credentials: "include",
-      });
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data?.error || "Failed to load class students");
-      }
+      }, "Failed to load class students");
 
       const classStudents = studentsFromResponse(data);
       if (classStudents.length === 0) {
@@ -2096,26 +2124,38 @@ export default function ReportCardsPage() {
 
       let first = true;
 
+      const skippedStudents: string[] = [];
+
       for (const s of classStudents) {
-        const payload = await buildStudentReportPayload({
-          studentId: s.id,
-          yearId,
-          termId,
-          reportType,
-        });
+        try {
+          const payload = await buildStudentReportPayload({
+            studentId: s.id,
+            yearId,
+            termId,
+            reportType,
+          });
 
-        const profileImage = await loadPdfImage(
-          getStudentProfileImageUrl(payload.student),
-          `profile-${s.id}`
-        );
+          renderStudentReportPage(
+            pdf,
+            payload,
+            { badgeImage, signatureImage },
+            first
+          );
+          first = false;
+        } catch (err) {
+          const studentName = [s.firstName, s.lastName].filter(Boolean).join(" ") || s.studentNo || s.id;
+          skippedStudents.push(studentName);
+          console.warn("Skipped student during class PDF generation", { student: s, err });
+          continue;
+        }
+      }
 
-        renderStudentReportPage(
-          pdf,
-          payload,
-          { badgeImage, signatureImage, profileImage },
-          first
+      if (first) {
+        throw new Error(
+          skippedStudents.length > 0
+            ? `No report cards could be generated. First skipped student: ${skippedStudents[0]}`
+            : "No report cards could be generated."
         );
-        first = false;
       }
 
       const fileName = safeFileName(
@@ -2123,6 +2163,12 @@ export default function ReportCardsPage() {
       );
 
       pdf.save(`${fileName}.pdf`);
+
+      if (skippedStudents.length > 0) {
+        alert(
+          `Class PDF generated, but ${skippedStudents.length} student(s) were skipped because their data could not be loaded. Check the browser console for details.`
+        );
+      }
     } catch (err: any) {
       alert(err?.message || "Failed to generate class report cards PDF");
     } finally {
