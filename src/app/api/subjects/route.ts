@@ -22,6 +22,15 @@ async function resolveClass(classId: string, className: string) {
   return null;
 }
 
+const subjectSelect = {
+  id: true,
+  name: true,
+  code: true,
+  level: true,
+  isActive: true,
+  isCompulsory: true,
+} as const;
+
 export async function GET(req: Request) {
   try {
     const user = await requireUser();
@@ -43,15 +52,8 @@ export async function GET(req: Request) {
           isActive: true,
           level: cls.level,
         },
-        orderBy: [{ name: "asc" }],
-        select: {
-          id: true,
-          name: true,
-          code: true,
-          level: true,
-          isActive: true,
-          isCompulsory: true,
-        },
+        orderBy: [{ isCompulsory: "desc" }, { name: "asc" }],
+        select: subjectSelect,
       });
 
       return NextResponse.json(rows);
@@ -78,15 +80,8 @@ export async function GET(req: Request) {
           isActive: true,
           level: cls.level,
         },
-        orderBy: [{ name: "asc" }],
-        select: {
-          id: true,
-          name: true,
-          code: true,
-          level: true,
-          isActive: true,
-          isCompulsory: true,
-        },
+        orderBy: [{ isCompulsory: "desc" }, { name: "asc" }],
+        select: subjectSelect,
       });
 
       return NextResponse.json(rows);
@@ -106,15 +101,8 @@ export async function GET(req: Request) {
         isActive: true,
         level: cls.level,
       },
-      orderBy: [{ name: "asc" }],
-      select: {
-        id: true,
-        name: true,
-        code: true,
-        level: true,
-        isActive: true,
-        isCompulsory: true,
-      },
+      orderBy: [{ isCompulsory: "desc" }, { name: "asc" }],
+      select: subjectSelect,
     });
 
     return NextResponse.json(rows);

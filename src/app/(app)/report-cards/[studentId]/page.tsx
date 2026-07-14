@@ -190,59 +190,43 @@ const DEFAULT_O_LEVEL_DESCRIPTORS: GradeDescriptorRow[] = [
 const DEFAULT_A_LEVEL_DESCRIPTORS: GradeDescriptorRow[] = [
   {
     grade: "A",
-    achievementLevel: "Excellent",
-    minMark: 80,
+    achievementLevel: "Exceptional",
+    minMark: 85,
     maxMark: 100,
-    descriptor: "Excellent performance with a very strong demonstration of knowledge and skill.",
+    descriptor: "Demonstrates an exceptional level of understanding and application across the subject requirements.",
     order: 1,
   },
   {
     grade: "B",
-    achievementLevel: "Very Good",
-    minMark: 75,
-    maxMark: 79.99,
-    descriptor: "Very good performance with clear understanding and sound application.",
+    achievementLevel: "Outstanding",
+    minMark: 70,
+    maxMark: 84.99,
+    descriptor: "Demonstrates a strong level of understanding with confident application of knowledge and skills.",
     order: 2,
   },
   {
     grade: "C",
-    achievementLevel: "Good",
-    minMark: 60,
-    maxMark: 74.99,
-    descriptor: "Good performance showing adequate understanding and application.",
+    achievementLevel: "Satisfactory",
+    minMark: 50,
+    maxMark: 69.99,
+    descriptor: "Demonstrates adequate understanding and acceptable application of the required knowledge and skills.",
     order: 3,
   },
   {
     grade: "D",
-    achievementLevel: "Credit",
-    minMark: 50,
-    maxMark: 59.99,
-    descriptor: "Creditable performance with acceptable competence.",
+    achievementLevel: "Basic",
+    minMark: 25,
+    maxMark: 49.99,
+    descriptor: "Demonstrates basic understanding and requires further support to improve application and consistency.",
     order: 4,
   },
   {
     grade: "E",
-    achievementLevel: "Fair",
-    minMark: 45,
-    maxMark: 49.99,
-    descriptor: "Fair performance with moderate competence.",
-    order: 5,
-  },
-  {
-    grade: "O",
-    achievementLevel: "Pass",
-    minMark: 40,
-    maxMark: 44.99,
-    descriptor: "Pass level performance with minimum acceptable competence.",
-    order: 6,
-  },
-  {
-    grade: "F",
-    achievementLevel: "Fail",
+    achievementLevel: "Elementary",
     minMark: 0,
-    maxMark: 39.99,
-    descriptor: "Below the expected minimum standard.",
-    order: 7,
+    maxMark: 24.99,
+    descriptor: "Demonstrates elementary achievement and needs significant improvement in knowledge and skill application.",
+    order: 5,
   },
 ];
 
@@ -314,14 +298,8 @@ function isTemporarySubsidiarySubject(subjectName: string) {
 }
 
 function gradeALevelSubject(subjectName: string, score: number | null, descriptors: GradeDescriptorRow[]) {
-  if (score === null) return "—";
-
-  // A-Level subsidiary subjects only carry either 1 point or 0 points.
-  // Therefore they should display only O or F, not A/B/C/D/E.
-  if (isTemporarySubsidiarySubject(subjectName)) {
-    return Number(score) >= 50 ? "O" : "F";
-  }
-
+  // A-Level now displays the same broad A-E grade scale as O-Level.
+  // General Paper, Subsidiary Mathematics, and ICT are capped only when computing points.
   return gradeScore(score, descriptors);
 }
 
@@ -329,24 +307,20 @@ function getALevelPoints(subjectName: string, grade: string) {
   const g = String(grade || "").trim().toUpperCase();
 
   if (isTemporarySubsidiarySubject(subjectName)) {
-    return g === "O" ? 1 : 0;
+    return ["A", "B", "C", "D", "E"].includes(g) ? 1 : 0;
   }
 
   switch (g) {
     case "A":
-      return 6;
-    case "B":
       return 5;
-    case "C":
+    case "B":
       return 4;
-    case "D":
+    case "C":
       return 3;
-    case "E":
+    case "D":
       return 2;
-    case "O":
+    case "E":
       return 1;
-    case "F":
-      return 0;
     default:
       return 0;
   }
@@ -639,6 +613,7 @@ export default function StudentReportCardPage() {
 
   const [loading, setLoading] = React.useState(true);
   const [downloading, setDownloading] = React.useState(false);
+  const [modernHtmlDownloading, setModernHtmlDownloading] = React.useState(false);
   const [error, setError] = React.useState("");
 
   const [student, setStudent] = React.useState<StudentApiRow | null>(null);
@@ -2128,6 +2103,54 @@ export default function StudentReportCardPage() {
     }
   }
 
+
+  async function handleDownloadNewReportDesign() {
+    if (!studentId || !yearId || !termId || !reportType) return;
+
+    try {
+      setModernHtmlDownloading(true);
+
+      const params = new URLSearchParams({
+        studentId: String(studentId),
+        academicYearId: yearId,
+        termId,
+        reportType,
+      });
+
+      const res = await fetch(`/api/report-cards/html-pdf?${params.toString()}`, {
+        method: "GET",
+        cache: "no-store",
+        credentials: "include",
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        let message = "Failed to generate the new report design.";
+        try {
+          const data = JSON.parse(text);
+          message = data?.error || message;
+        } catch {
+          message = text || message;
+        }
+        throw new Error(message);
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${safeFileName(fullName || "Student")} New Report Design.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert(err?.message || "Failed to generate the new report design.");
+    } finally {
+      setModernHtmlDownloading(false);
+    }
+  }
+
   if (loading) {
     return <div className="p-4 text-sm text-slate-500">Loading report...</div>;
   }
@@ -2142,6 +2165,16 @@ export default function StudentReportCardPage() {
 
   const componentHeaders = scheme?.components || [];
   const hasPaperBreakdown = isALevelReport && rows.some((r) => (r.papers || []).length > 0);
+  const gradeCountMap = rows.reduce<Record<string, number>>((acc, row) => {
+    const grade = String(row.grade || "—").trim().toUpperCase() || "—";
+    acc[grade] = (acc[grade] || 0) + 1;
+    return acc;
+  }, {});
+  const gradeOrder = isALevelReport ? ["A", "B", "C", "D", "E", "—"] : ["A", "B", "C", "D", "E", "—"];
+  const gradeDistribution = gradeOrder.filter((grade) => gradeCountMap[grade]);
+  const descriptorForGrade = (grade: string) =>
+    gradeDescriptors.find((item) => String(item.grade).toUpperCase() === String(grade).toUpperCase())
+      ?.achievementLevel || "—";
 
   return (
     <div className="mx-auto max-w-6xl space-y-4 p-4">
@@ -2150,277 +2183,249 @@ export default function StudentReportCardPage() {
           title="Student Report Card"
           subtitle={reportTypeLabel(reportType)}
           right={
-            <Button onClick={handleDownloadPdf} disabled={downloading}>
-              {downloading ? "Generating PDF..." : "Download PDF"}
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                onClick={handleDownloadNewReportDesign}
+                disabled={modernHtmlDownloading || downloading}
+              >
+                {modernHtmlDownloading ? "Generating New Design..." : "Download New Report Design"}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={handleDownloadPdf}
+                disabled={downloading || modernHtmlDownloading}
+              >
+                {downloading ? "Generating Legacy PDF..." : "Download Legacy Report"}
+              </Button>
+            </div>
           }
         />
       </Card>
 
-      <div className="mx-auto w-full max-w-[210mm] rounded-[30px] border border-indigo-100 bg-gradient-to-br from-indigo-50 via-white to-teal-50 p-5 text-slate-900 shadow-xl">
-        <div className="rounded-[24px] border border-indigo-100 bg-white px-5 py-4 shadow-sm">
+      <div className="mx-auto w-full max-w-[210mm] overflow-hidden rounded-[28px] border border-slate-200 bg-[#fbfaf6] p-5 text-slate-900 shadow-xl">
+        <div className="h-2 rounded-t-[22px] bg-[#12264a] border-b-4 border-[#9f1f2d]" />
+
+        <div className="mt-4 grid grid-cols-[110px_1fr_140px] items-center gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex justify-center">
+            <div className="flex h-24 w-24 items-center justify-center rounded-full border-[6px] border-[#9f1f2d] bg-white shadow-inner">
+              <img src="/report-assets/badge.png" alt="School badge" className="h-[105%] w-[105%] object-contain" />
+            </div>
+          </div>
           <div className="text-center">
-            <div className="text-2xl font-extrabold tracking-tight text-slate-900">
+            <div className="text-[11px] font-black uppercase tracking-[0.28em] text-[#9f1f2d]">
+              {isALevelReport ? "A-Level Academic Report" : "O-Level Academic Report"}
+            </div>
+            <div className="mt-1 text-3xl font-black tracking-tight text-[#12264a]">
               {SCHOOL_NAME}
             </div>
-            <div className="mt-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-indigo-700">
+            <div className="mt-1 text-[12px] font-extrabold uppercase tracking-[0.26em] text-[#12264a]">
               {SCHOOL_MOTTO}
             </div>
             <div className="mt-1 text-[11px] text-slate-500">
               {SCHOOL_ADDRESS} • {SCHOOL_CONTACT}
             </div>
-            <div className="mt-3 inline-flex rounded-full bg-gradient-to-r from-indigo-700 to-teal-600 px-5 py-1.5 text-[10px] font-bold uppercase tracking-[0.24em] text-white shadow-sm">
-              {reportHeading}
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-center">
+            <div className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Academic Year</div>
+            <div className="mt-1 text-sm font-black text-slate-900">{academicYearName || yearId}</div>
+            <div className="mt-3 text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Period</div>
+            <div className="mt-1 text-sm font-black text-slate-900">{termName || termId}</div>
+          </div>
+        </div>
+
+        <div className="my-4 grid grid-cols-[1fr_auto_1fr] items-center gap-4">
+          <div className="h-[5px] border-y border-[#12264a] bg-[#9f1f2d]" />
+          <h2 className="m-0 text-center text-2xl font-black uppercase tracking-[0.16em] text-[#12264a]">
+            {reportHeading}
+          </h2>
+          <div className="h-[5px] border-y border-[#12264a] bg-[#9f1f2d]" />
+        </div>
+
+        <div className="grid grid-cols-[1.65fr_1fr] gap-4">
+          <div className="grid grid-cols-[92px_1fr] items-center gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-full border-4 border-[#9f1f2d] bg-slate-100">
+              <img src="/report-assets/student-profile.png" alt="Student profile" className="h-full w-full object-contain" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <ReportValueInline label="Name" value={fullName} />
+              <ReportValueInline label="Student No" value={studentNo} />
+              <ReportValueInline label="Class" value={className} />
+              <ReportValueInline label="Report Type" value={reportTypeLabel(reportType)} />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="border-r border-slate-200 pr-3">
+              <div className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Overall Average</div>
+              <div className="mt-2 text-4xl font-black text-[#12264a]">{formatPdfMark(overallAverage, reportType)}</div>
+              <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
+                <div className="h-full rounded-full bg-[#12264a]" style={{ width: `${Math.max(0, Math.min(100, Number(overallAverage || 0)))}%` }} />
+              </div>
+            </div>
+            <div className="text-center">
+              <div className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Final Grade</div>
+              <div className="mt-2 text-5xl font-black text-[#9f1f2d]">{overallGrade}</div>
+              <div className="mt-1 text-sm font-bold text-slate-700">{descriptorForGrade(overallGrade)}</div>
             </div>
           </div>
         </div>
 
-        <div className="mt-3 grid grid-cols-1 gap-2.5 md:grid-cols-[1.55fr_1fr_0.72fr]">
-          <ReportValueInline label="Name" value={fullName} />
-          <ReportValueInline label="Student No" value={studentNo} />
-          <ReportValueInline label="Class" value={className} />
+        <div className={`mt-4 grid gap-3 ${isALevelReport ? "grid-cols-5" : "grid-cols-4"}`}>
+          <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+            <div className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">Overall Average</div>
+            <div className="mt-1 text-2xl font-black text-slate-900">{formatPdfMark(overallAverage, reportType)}</div>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+            <div className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">Final Grade</div>
+            <div className="mt-1 text-2xl font-black text-slate-900">{overallGrade}</div>
+          </div>
+          {isALevelReport && (
+            <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+              <div className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">Overall Points</div>
+              <div className="mt-1 text-2xl font-black text-slate-900">
+                {totalPoints ?? 0} <span className="text-xs font-bold text-slate-400">out of 17</span>
+              </div>
+            </div>
+          )}
+          <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+            <div className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">Best Subject</div>
+            <div className="mt-1 text-sm font-black text-slate-900">{bestRow ? `${formatPdfMark(bestRow.total, reportType)} (${bestRow.subjectName})` : "—"}</div>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+            <div className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">Lowest Subject</div>
+            <div className="mt-1 text-sm font-black text-slate-900">{lowestRow ? `${formatPdfMark(lowestRow.total, reportType)} (${lowestRow.subjectName})` : "—"}</div>
+          </div>
         </div>
 
-        <div className="mt-3.5 overflow-hidden rounded-2xl border border-teal-100 bg-white shadow-sm">
-          <div className="border-b border-teal-100 bg-gradient-to-r from-teal-700 to-emerald-600 px-3 py-2 text-xs font-bold uppercase tracking-[0.18em] text-white">
-            Summary Results
-          </div>
-          <table className="w-full border-collapse text-[11px]">
-            <thead className="bg-teal-50 text-slate-700">
-              <tr>
-                <th className="px-3 py-2 text-left font-bold">Overall Average</th>
-                <th className="px-3 py-2 text-left font-bold">Final Grade</th>
-                {isALevelReport && (
-                  <th className="px-3 py-2 text-left font-bold">Total Points</th>
-                )}
-                <th className="px-3 py-2 text-left font-bold">Best Score</th>
-                <th className="px-3 py-2 text-left font-bold">Lowest Score</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr className="bg-white">
-                <td className="px-3 py-2 font-semibold text-slate-900">
-                  {formatMark(overallAverage)}
-                </td>
-                <td className="px-3 py-2">
-                  <Badge>{overallGrade}</Badge>
-                </td>
-                {isALevelReport && (
-                  <td className="px-3 py-2 font-semibold text-slate-900">
-                    {totalPoints ?? 0}
-                  </td>
-                )}
-                <td className="px-3 py-2 font-semibold text-slate-900">
-                  {bestRow ? `${formatMark(bestRow.total)} (${bestRow.subjectName})` : "—"}
-                </td>
-                <td className="px-3 py-2 font-semibold text-slate-900">
-                  {lowestRow ? `${formatMark(lowestRow.total)} (${lowestRow.subjectName})` : "—"}
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div className="mt-3.5 overflow-hidden rounded-2xl border border-indigo-100 bg-white shadow-sm">
-          <div className="border-b border-indigo-100 bg-gradient-to-r from-indigo-700 to-teal-600 px-3 py-2 text-xs font-bold uppercase tracking-[0.18em] text-white">
-            Subject Achievement Level
-          </div>
-          <table className="w-full border-collapse text-[10.8px]">
-            <thead>
-              <tr className="bg-indigo-50 text-slate-700">
-                <th className="px-2 py-[7px] text-left font-bold">Subject</th>
-                {hasPaperBreakdown && (
-                  <th className="px-2 py-[7px] text-center font-bold">Paper</th>
-                )}
-                {componentHeaders.map((component, index) => (
-                  <th
-                    key={component.assessmentId}
-                    className={`px-1 py-[7px] text-center font-bold ${
-                      hasPaperBreakdown && componentHeaders.length <= 2 ? "min-w-[72px]" : ""
-                    }`}
-                  >
-                    <div>{toShortAssessmentLabel(component.label, index)}</div>
-                    <div className="text-[9px] font-medium text-slate-500">
-                      {`(Out of ${formatMark(component.weightOutOf)})`}
-                    </div>
-                  </th>
-                ))}
-                <th className="px-1 py-[7px] text-center font-bold">Total</th>
-                <th className="px-1 py-[7px] text-center font-bold">Grade</th>
-                <th className="px-2 py-[7px] text-left font-bold">Teacher Comment</th>
-                <th className="px-1 py-[7px] text-center font-bold">Init.</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row, index) => {
-                const paperRows = row.papers || [];
-
-                if (hasPaperBreakdown && paperRows.length > 0) {
-                  return paperRows.map((paper, paperIndex) => (
-                    <tr
-                      key={`${row.subjectId}-${paper.paperId}`}
-                      className={index % 2 === 0 ? "bg-white" : "bg-indigo-50/30"}
-                    >
-                      {paperIndex === 0 && (
-                        <td
-                          rowSpan={paperRows.length}
-                          className="px-2 py-[7px] align-middle font-semibold text-slate-800"
-                        >
-                          {row.subjectName}
-                        </td>
-                      )}
-
-                      <td className="px-2 py-[7px] text-center text-slate-700">
-                        {paper.paperName}
-                      </td>
-
-                      {componentHeaders.map((component) => {
-                        const entry = paper.componentScores.find(
-                          (c) => c.assessmentId === component.assessmentId
-                        );
-                        return (
-                          <td
-                            key={component.assessmentId}
-                            className={`px-1 py-[7px] text-center text-slate-700 ${
-                              hasPaperBreakdown && componentHeaders.length <= 2
-                                ? "min-w-[72px]"
-                                : ""
-                            }`}
-                          >
-                            {formatMark(entry?.weightedScore ?? null)}
-                          </td>
-                        );
-                      })}
-
-                      {paperIndex === 0 && (
-                        <>
-                          <td
-                            rowSpan={paperRows.length}
-                            className="px-1 py-[7px] text-center align-middle font-bold text-slate-900"
-                          >
-                            {formatMark(row.total)}
-                          </td>
-                          <td
-                            rowSpan={paperRows.length}
-                            className="px-1 py-[7px] text-center align-middle"
-                          >
-                            <Badge>{row.grade}</Badge>
-                          </td>
-                          <td
-                            rowSpan={paperRows.length}
-                            className="px-2 py-[7px] align-middle text-[10.2px] leading-4 text-slate-700"
-                          >
-                            {row.teacherComment || "—"}
-                          </td>
-                          <td
-                            rowSpan={paperRows.length}
-                            className="px-1 py-[7px] text-center align-middle font-bold text-slate-800"
-                          >
-                            {row.teacherInitials}
-                          </td>
-                        </>
-                      )}
-                    </tr>
-                  ));
-                }
-
-                return (
-                  <tr key={row.subjectId} className={index % 2 === 0 ? "bg-white" : "bg-indigo-50/30"}>
-                    <td className="px-2 py-[7px] font-semibold text-slate-800">{row.subjectName}</td>
-                    {hasPaperBreakdown && (
-                      <td className="px-2 py-[7px] text-center text-slate-700">—</td>
-                    )}
-                    {componentHeaders.map((component) => {
-                      const entry = row.componentScores.find(
-                        (c) => c.assessmentId === component.assessmentId
-                      );
-                      return (
-                        <td
-                          key={component.assessmentId}
-                          className={`px-1 py-[7px] text-center text-slate-700 ${
-                            hasPaperBreakdown && componentHeaders.length <= 2
-                              ? "min-w-[72px]"
-                              : ""
-                          }`}
-                        >
-                          {formatMark(entry?.weightedScore ?? null)}
-                        </td>
-                      );
-                    })}
-                    <td className="px-1 py-[7px] text-center font-bold text-slate-900">
-                      {formatMark(row.total)}
-                    </td>
-                    <td className="px-1 py-[7px] text-center">
-                      <Badge>{row.grade}</Badge>
-                    </td>
-                    <td className="px-2 py-[7px] text-[10.2px] leading-4 text-slate-700">
-                      {row.teacherComment || "—"}
-                    </td>
-                    <td className="px-1 py-[7px] text-center font-bold text-slate-800">
-                      {row.teacherInitials}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="mt-3.5 overflow-hidden rounded-2xl border border-amber-100 bg-white shadow-sm">
-          <div className="border-b border-amber-100 bg-gradient-to-r from-amber-600 to-orange-500 px-3 py-2 text-xs font-bold uppercase tracking-[0.18em] text-white">
-            Grade Descriptor Table
-          </div>
-          <table className="w-full border-collapse text-[10.4px]">
-            <thead className="bg-amber-50">
-              <tr>
-                <th className="px-2 py-[7px] text-left font-bold">Grade</th>
-                <th className="px-2 py-[7px] text-left font-bold">Achievement Level</th>
-                <th className="px-2 py-[7px] text-left font-bold">Marks</th>
-                <th className="px-2 py-[7px] text-left font-bold">Descriptor</th>
-              </tr>
-            </thead>
-            <tbody>
-              {gradeDescriptors.map((item, index) => (
-                <tr
-                  key={`${item.grade}-${index}`}
-                  className={index % 2 === 0 ? "bg-white" : "bg-amber-50/40"}
-                >
-                  <td className="px-2 py-[7px] font-bold">{item.grade}</td>
-                  <td className="px-2 py-[7px] font-semibold">{item.achievementLevel}</td>
-                  <td className="px-2 py-[7px]">{`${formatMark(item.minMark)} - ${formatMark(
-                    item.maxMark
-                  )}`}</td>
-                  <td className="px-2 py-[7px] leading-4">{item.descriptor}</td>
+        <div className="mt-4 grid grid-cols-[1fr_260px] gap-4">
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="bg-[#12264a] px-4 py-3 text-sm font-black uppercase tracking-[0.18em] text-white">
+              Subject Achievement Level
+            </div>
+            <table className="w-full table-fixed border-collapse text-[11px]">
+              <thead className="bg-slate-100 text-slate-800">
+                <tr>
+                  <th className="border border-slate-200 px-2 py-2 text-left font-black">Subject</th>
+                  {hasPaperBreakdown && <th className="border border-slate-200 px-2 py-2 text-center font-black">Paper</th>}
+                  {componentHeaders.map((component, index) => (
+                    <th key={component.assessmentId} className="border border-slate-200 px-1 py-2 text-center font-black">
+                      <div>{toPdfShortAssessmentLabel(component.label, index, reportType)}</div>
+                      <div className="text-[9px] font-semibold text-slate-500">Out of {formatMark(component.weightOutOf)}</div>
+                    </th>
+                  ))}
+                  <th className="border border-slate-200 px-1 py-2 text-center font-black">Total</th>
+                  <th className="border border-slate-200 px-1 py-2 text-center font-black">Grade</th>
+                  {isALevelReport && <th className="border border-slate-200 px-1 py-2 text-center font-black">Pts</th>}
+                  <th className="border border-slate-200 px-2 py-2 text-left font-black">Teacher Comment</th>
+                  <th className="border border-slate-200 px-1 py-2 text-center font-black">Init.</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="mt-3.5 overflow-hidden rounded-2xl border border-indigo-100 bg-white shadow-sm">
-          <div className="border-b border-indigo-100 bg-gradient-to-r from-indigo-700 to-teal-600 px-3 py-2 text-xs font-bold uppercase tracking-[0.18em] text-white">
-            Head Teacher&apos;s Comment
+              </thead>
+              <tbody>
+                {rows.map((row, index) => {
+                  const paperRows = row.papers || [];
+                  if (hasPaperBreakdown && paperRows.length > 0) {
+                    return paperRows.map((paper, paperIndex) => (
+                      <tr key={`${row.subjectId}-${paper.paperId}`} className={index % 2 === 0 ? "bg-white" : "bg-slate-50"}>
+                        {paperIndex === 0 && <td rowSpan={paperRows.length} className="border border-slate-200 px-2 py-2 align-middle font-black">{row.subjectName}</td>}
+                        <td className="border border-slate-200 px-2 py-2 text-center">{paper.paperName}</td>
+                        {componentHeaders.map((component) => {
+                          const entry = paper.componentScores.find((c) => c.assessmentId === component.assessmentId);
+                          return <td key={component.assessmentId} className="border border-slate-200 px-1 py-2 text-center">{formatPdfMark(entry?.weightedScore ?? null, reportType)}</td>;
+                        })}
+                        {paperIndex === 0 && (
+                          <>
+                            <td rowSpan={paperRows.length} className="border border-slate-200 px-1 py-2 text-center align-middle font-black">{formatPdfMark(row.total, reportType)}</td>
+                            <td rowSpan={paperRows.length} className="border border-slate-200 px-1 py-2 text-center align-middle"><Badge>{row.grade}</Badge></td>
+                            {isALevelReport && <td rowSpan={paperRows.length} className="border border-slate-200 px-1 py-2 text-center align-middle font-black">{getALevelPoints(row.subjectName, row.grade)}</td>}
+                            <td rowSpan={paperRows.length} className="border border-slate-200 px-2 py-2 align-middle text-[10px] leading-4">{row.teacherComment || "—"}</td>
+                            <td rowSpan={paperRows.length} className="border border-slate-200 px-1 py-2 text-center align-middle font-black">{row.teacherInitials}</td>
+                          </>
+                        )}
+                      </tr>
+                    ));
+                  }
+                  return (
+                    <tr key={row.subjectId} className={index % 2 === 0 ? "bg-white" : "bg-slate-50"}>
+                      <td className="border border-slate-200 px-2 py-2 font-black">{row.subjectName}</td>
+                      {hasPaperBreakdown && <td className="border border-slate-200 px-2 py-2 text-center">—</td>}
+                      {componentHeaders.map((component) => {
+                        const entry = row.componentScores.find((c) => c.assessmentId === component.assessmentId);
+                        return <td key={component.assessmentId} className="border border-slate-200 px-1 py-2 text-center">{formatPdfMark(entry?.weightedScore ?? null, reportType)}</td>;
+                      })}
+                      <td className="border border-slate-200 px-1 py-2 text-center font-black">{formatPdfMark(row.total, reportType)}</td>
+                      <td className="border border-slate-200 px-1 py-2 text-center"><Badge>{row.grade}</Badge></td>
+                      {isALevelReport && <td className="border border-slate-200 px-1 py-2 text-center font-black">{getALevelPoints(row.subjectName, row.grade)}</td>}
+                      <td className="border border-slate-200 px-2 py-2 text-[10px] leading-4">{row.teacherComment || "—"}</td>
+                      <td className="border border-slate-200 px-1 py-2 text-center font-black">{row.teacherInitials}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
-          <div className="px-3 py-2.5 text-[10.8px] leading-5 text-slate-700">
-            {headTeacherComment || "—"}
-          </div>
-        </div>
 
-        <div className="mt-3.5 rounded-2xl border border-indigo-100 bg-white p-4 shadow-sm">
-          <div className="grid grid-cols-2 gap-6">
-            <div>
-              <div className="h-6" />
-              <div className="border-t border-slate-300 pt-1 text-[10.5px] text-slate-700">
-                Class Teacher Signature
+          <div className="space-y-3">
+            <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+              <div className="text-sm font-black uppercase tracking-[0.12em] text-[#12264a]">Grade Distribution</div>
+              <div className="mt-3 space-y-2">
+                {gradeDistribution.length ? gradeDistribution.map((grade) => (
+                  <div key={grade} className="flex items-center gap-2 text-xs">
+                    <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[#9f1f2d] text-[10px] font-black text-white">{grade}</span>
+                    <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-200">
+                      <div className="h-full rounded-full bg-[#12264a]" style={{ width: `${Math.round(((gradeCountMap[grade] || 0) / Math.max(rows.length, 1)) * 100)}%` }} />
+                    </div>
+                    <strong>{gradeCountMap[grade]}</strong>
+                  </div>
+                )) : <div className="text-xs text-slate-500">No grades yet.</div>}
               </div>
             </div>
-            <div>
-              <div className="h-6" />
-              <div className="border-t border-slate-300 pt-1 text-[10.5px] text-slate-700">
-                Head Teacher Signature
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+              <div className="text-sm font-black uppercase tracking-[0.12em] text-[#12264a]">
+                {isALevelReport ? "A-Level Grade & Points" : "Grade Scale"}
+              </div>
+              {isALevelReport && (
+                <div className="mt-2 flex flex-wrap gap-1 text-[10px] font-black text-[#9f1f2d]">
+                  {[["A",5],["B",4],["C",3],["D",2],["E",1]].map(([g, pts]) => (
+                    <span key={String(g)} className="rounded-full border border-red-100 bg-red-50 px-2 py-1">{g} = {pts}</span>
+                  ))}
+                  <span className="w-full rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-slate-600">GP / Subsidiary Math / ICT: max 1 point</span>
+                </div>
+              )}
+              <div className="mt-3 space-y-1.5">
+                {gradeDescriptors.map((item) => (
+                  <div key={item.grade} className="grid grid-cols-[28px_1fr_auto] items-center gap-2 text-[11px]">
+                    <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[#12264a] text-[10px] font-black text-white">{item.grade}</span>
+                    <span className="font-bold text-slate-700">{item.achievementLevel}</span>
+                    <strong className="text-slate-500">{formatMark(item.minMark)}–{formatMark(item.maxMark)}</strong>
+                  </div>
+                ))}
               </div>
             </div>
           </div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-[1fr_260px] gap-4">
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="bg-[#12264a] px-4 py-3 text-sm font-black uppercase tracking-[0.16em] text-white">Head Teacher&apos;s Comment</div>
+            <div className="px-4 py-3 text-sm leading-6 text-slate-700">{headTeacherComment || "—"}</div>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="flex h-full flex-col justify-around gap-4">
+              <div className="text-center">
+                <div className="mx-auto h-8 w-44 border-b border-slate-400" />
+                <div className="mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-600">Head Teacher</div>
+              </div>
+              <div className="text-center">
+                <div className="mx-auto h-8 w-44 border-b border-slate-400" />
+                <div className="mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-600">Class Teacher</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4 flex h-9 items-center justify-center rounded-xl bg-[#12264a] text-[11px] font-black uppercase tracking-[0.3em] text-white">
+          IN GOD, WE TRUST
         </div>
       </div>
     </div>

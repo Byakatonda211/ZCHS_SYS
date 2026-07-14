@@ -40,6 +40,10 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "Missing level" }, { status: 400 });
     }
 
+    if (!["O_LEVEL", "A_LEVEL"].includes(level)) {
+      return NextResponse.json({ error: "Valid subject level is required" }, { status: 400 });
+    }
+
     const rows = await prisma.subject.findMany({
       where: {
         level,
@@ -51,6 +55,7 @@ export async function GET(req: Request) {
         name: true,
         code: true,
         level: true,
+        isActive: true,
         isCompulsory: true,
         papers: {
           where: { isActive: true },
@@ -123,7 +128,19 @@ export async function POST(req: Request) {
           name: true,
           code: true,
           level: true,
+          isActive: true,
           isCompulsory: true,
+          papers: {
+            where: { isActive: true },
+            orderBy: [{ order: "asc" }, { name: "asc" }],
+            select: {
+              id: true,
+              subjectId: true,
+              name: true,
+              code: true,
+              order: true,
+            },
+          },
         },
       });
 
@@ -146,7 +163,19 @@ export async function POST(req: Request) {
         name: true,
         code: true,
         level: true,
+        isActive: true,
         isCompulsory: true,
+        papers: {
+          where: { isActive: true },
+          orderBy: [{ order: "asc" }, { name: "asc" }],
+          select: {
+            id: true,
+            subjectId: true,
+            name: true,
+            code: true,
+            order: true,
+          },
+        },
       },
     });
 
