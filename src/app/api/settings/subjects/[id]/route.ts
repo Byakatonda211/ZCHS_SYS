@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
+import type { Prisma } from "@prisma/client";
 
 function toBoolOrUndefined(v: any): boolean | undefined {
   if (v === undefined || v === null || v === "") return undefined;
@@ -46,7 +47,7 @@ const subjectSelect = {
   isCompulsory: true,
   papers: {
     where: { isActive: true },
-    orderBy: [{ order: "asc" as const }, { name: "asc" as const }],
+    orderBy: [{ order: "asc" }, { name: "asc" }],
     select: {
       id: true,
       subjectId: true,
@@ -55,7 +56,7 @@ const subjectSelect = {
       order: true,
     },
   },
-} as const;
+} satisfies Prisma.SubjectSelect;
 
 export async function PATCH(req: Request, ctx: Ctx) {
   try {
