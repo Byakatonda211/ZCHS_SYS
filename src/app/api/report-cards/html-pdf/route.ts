@@ -66,7 +66,6 @@ async function htmlToPdfBuffer(html: string) {
       printBackground: true,
       preferCSSPageSize: true,
       margin: { top: "0mm", right: "0mm", bottom: "0mm", left: "0mm" },
-      timeout: 120_000,
     });
   } finally {
     await browser.close();
