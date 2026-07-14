@@ -143,7 +143,12 @@ export async function GET(req: Request) {
       studentId ? `${firstName} New Report Design.pdf` : `${fileStem}.pdf`
     );
 
-    return new NextResponse(pdf, {
+    const pdfBody = pdf.buffer.slice(
+      pdf.byteOffset,
+      pdf.byteOffset + pdf.byteLength
+    ) as ArrayBuffer;
+
+    return new NextResponse(pdfBody, {
       status: 200,
       headers: {
         "Content-Type": "application/pdf",
