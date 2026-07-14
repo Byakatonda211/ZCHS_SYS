@@ -240,59 +240,43 @@ const DEFAULT_O_LEVEL_DESCRIPTORS: GradeDescriptorRow[] = [
 const DEFAULT_A_LEVEL_DESCRIPTORS: GradeDescriptorRow[] = [
   {
     grade: "A",
-    achievementLevel: "Excellent",
-    minMark: 80,
+    achievementLevel: "Exceptional",
+    minMark: 85,
     maxMark: 100,
-    descriptor: "Excellent performance with a very strong demonstration of knowledge and skill.",
+    descriptor: "Demonstrates an exceptional level of understanding and application across the subject requirements.",
     order: 1,
   },
   {
     grade: "B",
-    achievementLevel: "Very Good",
-    minMark: 75,
-    maxMark: 79.99,
-    descriptor: "Very good performance with clear understanding and sound application.",
+    achievementLevel: "Outstanding",
+    minMark: 70,
+    maxMark: 84.99,
+    descriptor: "Demonstrates a strong level of understanding with confident application of knowledge and skills.",
     order: 2,
   },
   {
     grade: "C",
-    achievementLevel: "Good",
-    minMark: 60,
-    maxMark: 74.99,
-    descriptor: "Good performance showing adequate understanding and application.",
+    achievementLevel: "Satisfactory",
+    minMark: 50,
+    maxMark: 69.99,
+    descriptor: "Demonstrates adequate understanding and acceptable application of the required knowledge and skills.",
     order: 3,
   },
   {
     grade: "D",
-    achievementLevel: "Credit",
-    minMark: 50,
-    maxMark: 59.99,
-    descriptor: "Creditable performance with acceptable competence.",
+    achievementLevel: "Basic",
+    minMark: 25,
+    maxMark: 49.99,
+    descriptor: "Demonstrates basic understanding and requires further support to improve application and consistency.",
     order: 4,
   },
   {
     grade: "E",
-    achievementLevel: "Fair",
-    minMark: 45,
-    maxMark: 49.99,
-    descriptor: "Fair performance with moderate competence.",
-    order: 5,
-  },
-  {
-    grade: "O",
-    achievementLevel: "Pass",
-    minMark: 40,
-    maxMark: 44.99,
-    descriptor: "Pass level performance with minimum acceptable competence.",
-    order: 6,
-  },
-  {
-    grade: "F",
-    achievementLevel: "Fail",
+    achievementLevel: "Elementary",
     minMark: 0,
-    maxMark: 39.99,
-    descriptor: "Below the expected minimum standard.",
-    order: 7,
+    maxMark: 24.99,
+    descriptor: "Demonstrates elementary achievement and needs significant improvement in knowledge and skill application.",
+    order: 5,
   },
 ];
 
@@ -440,11 +424,8 @@ function isTemporarySubsidiarySubject(subjectName: string) {
 }
 
 function gradeSubjectScore(subjectName: string, score: number | null, descriptors: GradeDescriptorRow[]) {
-  if (isTemporarySubsidiarySubject(subjectName)) {
-    if (score === null) return "—";
-    return Number(score) >= 50 ? "O" : "F";
-  }
-
+  // A-Level now displays the same broad A-E grade scale as O-Level.
+  // General Paper, Subsidiary Mathematics, and ICT are capped only when computing points.
   return gradeScore(score, descriptors);
 }
 
@@ -468,25 +449,20 @@ function getALevelPoints(subjectName: string, grade: string) {
   const g = String(grade || "").trim().toUpperCase();
 
   if (isTemporarySubsidiarySubject(subjectName)) {
-    if (["A", "B", "C", "D", "E", "O"].includes(g)) return 1;
-    return 0;
+    return ["A", "B", "C", "D", "E"].includes(g) ? 1 : 0;
   }
 
   switch (g) {
     case "A":
-      return 6;
-    case "B":
       return 5;
-    case "C":
+    case "B":
       return 4;
-    case "D":
+    case "C":
       return 3;
-    case "E":
+    case "D":
       return 2;
-    case "O":
+    case "E":
       return 1;
-    case "F":
-      return 0;
     default:
       return 0;
   }
@@ -2314,6 +2290,7 @@ export default function ReportCardsPage() {
   const [bootLoading, setBootLoading] = React.useState(true);
   const [studentsLoading, setStudentsLoading] = React.useState(false);
   const [bulkDownloading, setBulkDownloading] = React.useState(false);
+  const [bulkModernHtmlDownloading, setBulkModernHtmlDownloading] = React.useState(false);
   const [bootError, setBootError] = React.useState("");
   const [studentsError, setStudentsError] = React.useState("");
 
@@ -2473,6 +2450,60 @@ export default function ReportCardsPage() {
     };
   }, [mounted, classId, query, page]);
 
+
+  async function handleDownloadNewClassReportDesign() {
+    if (!classId || !yearId || !termId) return;
+
+    try {
+      setBulkModernHtmlDownloading(true);
+
+      const params = new URLSearchParams({
+        classId,
+        academicYearId: yearId,
+        termId,
+        reportType,
+      });
+      if (query.trim()) params.set("q", query.trim());
+
+      const res = await fetch(`/api/report-cards/html-pdf?${params.toString()}`, {
+        method: "GET",
+        cache: "no-store",
+        credentials: "include",
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        let message = "Failed to generate the new class report design.";
+        try {
+          const data = JSON.parse(text);
+          message = data?.error || message;
+        } catch {
+          message = text || message;
+        }
+        throw new Error(message);
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const classInfo = classes.find((c) => c.id === classId);
+      const termInfo = terms.find((t) => t.id === termId);
+      const yearInfo = years.find((y) => y.id === yearId);
+      a.download = safeFileName(
+        `${classInfo?.name || "Class"} ${reportTypeLabel(reportType)} ${termInfo?.name || ""} ${yearInfo?.name || ""} New Report Design.pdf`
+      );
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert(err?.message || "Failed to generate the new class report design.");
+    } finally {
+      setBulkModernHtmlDownloading(false);
+    }
+  }
+
   async function handleDownloadClassPdf() {
     if (!classId || !yearId || !termId) return;
 
@@ -2595,11 +2626,17 @@ export default function ReportCardsPage() {
           right={
             <div className="flex items-center gap-2">
               <Button
+                disabled={!classId || !yearId || !termId || bulkModernHtmlDownloading || bulkDownloading || studentsLoading}
+                onClick={handleDownloadNewClassReportDesign}
+              >
+                {bulkModernHtmlDownloading ? "Building New Design..." : "Download New Report Design"}
+              </Button>
+              <Button
                 variant="secondary"
-                disabled={!classId || !yearId || !termId || bulkDownloading || studentsLoading}
+                disabled={!classId || !yearId || !termId || bulkDownloading || bulkModernHtmlDownloading || studentsLoading}
                 onClick={handleDownloadClassPdf}
               >
-                {bulkDownloading ? "Building Class PDF..." : "Download Class PDF"}
+                {bulkDownloading ? "Building Legacy PDF..." : "Download Legacy Report"}
               </Button>
             </div>
           }

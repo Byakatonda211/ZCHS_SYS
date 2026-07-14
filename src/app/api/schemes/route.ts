@@ -26,13 +26,11 @@ function defaultDescriptorsFor(reportType: string) {
 
   if (isALevel) {
     return [
-      { grade: "A", achievementLevel: "Excellent", minMark: 80.0, maxMark: 100.0, descriptor: "Excellent performance with a very strong demonstration of knowledge and skill.", order: 1 },
-      { grade: "B", achievementLevel: "Very Good", minMark: 75.0, maxMark: 79.99, descriptor: "Very good performance with clear understanding and sound application.", order: 2 },
-      { grade: "C", achievementLevel: "Good", minMark: 70.0, maxMark: 74.99, descriptor: "Good performance showing adequate understanding and application.", order: 3 },
-      { grade: "D", achievementLevel: "Credit", minMark: 65.0, maxMark: 69.99, descriptor: "Creditable performance with acceptable competence.", order: 4 },
-      { grade: "E", achievementLevel: "Fair", minMark: 60.0, maxMark: 64.99, descriptor: "Fair performance with moderate competence.", order: 5 },
-      { grade: "O", achievementLevel: "Pass", minMark: 50.0, maxMark: 59.99, descriptor: "Pass level performance with minimum acceptable competence.", order: 6 },
-      { grade: "F", achievementLevel: "Fail", minMark: 0.0, maxMark: 49.99, descriptor: "Below the expected minimum standard.", order: 7 },
+      { grade: "A", achievementLevel: "Exceptional", minMark: 85.0, maxMark: 100.0, descriptor: "Demonstrates an exceptional level of understanding and application across the subject requirements.", order: 1 },
+      { grade: "B", achievementLevel: "Outstanding", minMark: 70.0, maxMark: 84.99, descriptor: "Demonstrates a strong level of understanding with confident application of knowledge and skills.", order: 2 },
+      { grade: "C", achievementLevel: "Satisfactory", minMark: 50.0, maxMark: 69.99, descriptor: "Demonstrates adequate understanding and acceptable application of the required knowledge and skills.", order: 3 },
+      { grade: "D", achievementLevel: "Basic", minMark: 25.0, maxMark: 49.99, descriptor: "Demonstrates basic understanding and requires further support to improve application and consistency.", order: 4 },
+      { grade: "E", achievementLevel: "Elementary", minMark: 0.0, maxMark: 24.99, descriptor: "Demonstrates elementary achievement and needs significant improvement in knowledge and skill application.", order: 5 },
     ];
   }
 
@@ -195,7 +193,7 @@ export async function POST(req: Request) {
       return NextResponse.json(
         {
           error:
-            "Database/client not updated yet. Run prisma migrate and prisma generate, then restart the dev server.",
+            "Prisma client is not matching the existing schema. Run npx prisma generate, then restart the dev server.",
         },
         { status: 500 }
       );
