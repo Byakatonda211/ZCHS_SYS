@@ -4,6 +4,14 @@ import { requireUser } from "@/lib/auth";
 
 type RoleUser = { id: string; role: string };
 
+type GradeDescriptor = {
+  grade: string;
+  achievementLevel?: string;
+  minMark: number;
+  maxMark: number;
+  order: number;
+};
+
 async function resolveClass(classId: string, className: string) {
   if (classId) {
     const byId = await prisma.class.findUnique({
@@ -91,61 +99,100 @@ function round2(v: number) {
   return Math.round(v * 100) / 100;
 }
 
-function defaultGrade(scorePercent: number) {
-  if (scorePercent >= 80) return "A";
-  if (scorePercent >= 75) return "B";
-  if (scorePercent >= 70) return "C";
-  if (scorePercent >= 65) return "D";
-  if (scorePercent >= 60) return "E";
-  if (scorePercent >= 50) return "O";
-  return "F";
+const DEFAULT_AE_GRADE_DESCRIPTORS: GradeDescriptor[] = [
+  { grade: "A", achievementLevel: "Exceptional", minMark: 85, maxMark: 100, order: 1 },
+  { grade: "B", achievementLevel: "Outstanding", minMark: 70, maxMark: 84.99, order: 2 },
+  { grade: "C", achievementLevel: "Satisfactory", minMark: 50, maxMark: 69.99, order: 3 },
+  { grade: "D", achievementLevel: "Basic", minMark: 25, maxMark: 49.99, order: 4 },
+  { grade: "E", achievementLevel: "Elementary", minMark: 0, maxMark: 24.99, order: 5 },
+];
+
+function normalizeGradeDescriptors(rows: any[], reportType: string): GradeDescriptor[] {
+  const allowedGrades = new Set(["A", "B", "C", "D", "E"]);
+
+  const cleaned = (Array.isArray(rows) ? rows : [])
+    .map((row) => ({
+      grade: String(row.grade || "").trim().toUpperCase(),
+      achievementLevel: String(row.achievementLevel || "").trim(),
+      minMark: Number(row.minMark),
+      maxMark: Number(row.maxMark),
+      order: Number(row.order ?? 999),
+    }))
+    .filter(
+      (row) =>
+        row.grade &&
+        allowedGrades.has(row.grade) &&
+        Number.isFinite(row.minMark) &&
+        Number.isFinite(row.maxMark)
+    )
+    .sort((a, b) => a.order - b.order || b.minMark - a.minMark);
+
+  // Analysis should always use the A-E report-card scale. If the database still has
+  // old O/F descriptor rows, they are intentionally ignored here.
+  return cleaned.length ? cleaned : DEFAULT_AE_GRADE_DESCRIPTORS;
 }
 
-async function resolveGrade(level: string, scorePercent: number) {
-  const rules = await prisma.remarkRule.findMany({
-    where: {
-      level: level as any,
-      isActive: true,
-      grade: { not: null },
-    },
-    orderBy: [{ minScore: "desc" }],
-    select: {
-      minScore: true,
-      maxScore: true,
-      grade: true,
-    },
-  });
-
-  for (const rule of rules) {
-    const min = Number(rule.minScore);
-    const max = Number(rule.maxScore);
-    if (scorePercent >= min && scorePercent <= max) {
-      return String(rule.grade || "").trim() || defaultGrade(scorePercent);
-    }
-  }
-
-  return defaultGrade(scorePercent);
+function gradeOrderFromDescriptors(descriptors: GradeDescriptor[]) {
+  return descriptors.map((d) => d.grade);
 }
 
-async function getSchemeComponents(reportType: string) {
-  const p: any = prisma as any;
+function resolveGrade(scoreValue: number, descriptors: GradeDescriptor[]) {
+  const n = Number(scoreValue);
+  if (!Number.isFinite(n)) return "E";
 
+  // Sort by minMark descending so boundary overlaps choose the higher grade.
+  const byThreshold = [...descriptors].sort((a, b) => b.minMark - a.minMark);
+  const epsilon = 0.01;
+
+  const found = byThreshold.find(
+    (d) => n + epsilon >= Number(d.minMark) && n - epsilon <= Number(d.maxMark)
+  );
+
+  if (found?.grade) return found.grade;
+
+  const byOrder = [...descriptors].sort((a, b) => a.order - b.order);
+  const lowest = byOrder[byOrder.length - 1];
+  const highest = byOrder[0];
+
+  if (highest && n > highest.maxMark) return highest.grade;
+  if (lowest && n < lowest.minMark) return lowest.grade;
+
+  return lowest?.grade || "E";
+}
+
+async function getSchemeDetails(reportType: string) {
   const scheme = await prisma.reportScheme.findUnique({
     where: { reportType: reportType as any },
-    select: { id: true },
-  });
-
-  if (!scheme) return [];
-
-  return await p.reportSchemeComponent.findMany({
-    where: { schemeId: scheme.id },
-    orderBy: [{ order: "asc" }, { id: "asc" }],
     select: {
-      assessmentDefinitionId: true,
-      weightOutOf: true,
-      enterOutOf: true,
+      id: true,
+      components: {
+        orderBy: [{ order: "asc" }, { id: "asc" }],
+        select: {
+          assessmentDefinitionId: true,
+          weightOutOf: true,
+          enterOutOf: true,
+        },
+      },
+      gradeDescriptors: {
+        orderBy: [{ order: "asc" }],
+        select: {
+          grade: true,
+          achievementLevel: true,
+          minMark: true,
+          maxMark: true,
+          order: true,
+        },
+      },
     },
   });
+
+  const gradeDescriptors = normalizeGradeDescriptors(scheme?.gradeDescriptors || [], reportType);
+
+  return {
+    components: scheme?.components || [],
+    gradeDescriptors,
+    gradeOrder: gradeOrderFromDescriptors(gradeDescriptors),
+  };
 }
 
 export async function GET(req: Request) {
@@ -188,24 +235,27 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
     }
 
-    const schemeComponents = await getSchemeComponents(reportType);
+    const { components: schemeComponents, gradeDescriptors, gradeOrder } = await getSchemeDetails(reportType);
     if (!schemeComponents.length) {
       return NextResponse.json({
-        summary: { A: 0, B: 0, C: 0, D: 0, E: 0, O: 0, F: 0 },
+        summary: Object.fromEntries(gradeOrder.map((grade) => [grade, 0])),
         rows: [],
-        gradeOrder: ["A", "B", "C", "D", "E", "O", "F"],
+        gradeOrder,
         meta: {
           className: cls.name,
           subjectName: subject.name,
           reportType,
           totalStudents: 0,
+          totalOutOf: 0,
         },
       });
     }
 
-    const schemeMax = schemeComponents.reduce(
-      (sum: number, sc: any) => sum + (Number(sc.weightOutOf ?? 0) || 0),
-      0
+    const schemeTotalOutOf = round2(
+      schemeComponents.reduce(
+        (sum: number, sc: any) => sum + (Number(sc.weightOutOf ?? 0) || 0),
+        0
+      )
     );
 
     const definitionIds = schemeComponents.map((c: any) => c.assessmentDefinitionId);
@@ -269,15 +319,9 @@ export async function GET(req: Request) {
       },
     });
 
-    const summary: Record<string, number> = {
-      A: 0,
-      B: 0,
-      C: 0,
-      D: 0,
-      E: 0,
-      O: 0,
-      F: 0,
-    };
+    const summary: Record<string, number> = Object.fromEntries(
+      gradeOrder.map((grade) => [grade, 0])
+    );
 
     const rows: {
       studentId: string;
@@ -334,15 +378,14 @@ export async function GET(req: Request) {
       }
 
       const totalScore = round2(total);
-      const scorePercent = schemeMax > 0 ? round2((totalScore / schemeMax) * 100) : totalScore;
-      const grade = await resolveGrade(String(cls.level), scorePercent);
+      const grade = resolveGrade(totalScore, gradeDescriptors);
 
       summary[grade] = (summary[grade] ?? 0) + 1;
 
       const studentName = [
         enrollment.student.firstName,
-        enrollment.student.lastName,
         enrollment.student.otherNames,
+        enrollment.student.lastName,
       ]
         .filter(Boolean)
         .join(" ");
@@ -362,12 +405,13 @@ export async function GET(req: Request) {
     return NextResponse.json({
       summary,
       rows,
-      gradeOrder: ["A", "B", "C", "D", "E", "O", "F"],
+      gradeOrder,
       meta: {
         className: cls.name,
         subjectName: subject.name,
         reportType,
         totalStudents: rows.length,
+        totalOutOf: schemeTotalOutOf,
       },
     });
   } catch (e: any) {
