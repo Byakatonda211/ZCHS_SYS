@@ -234,6 +234,13 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "Report scheme not found or has no components" }, { status: 400 });
     }
 
+    const schemeTotalOutOf = round2(
+      schemeComponents.reduce(
+        (sum: number, sc: any) => sum + (Number(sc.weightOutOf ?? 0) || 0),
+        0
+      )
+    );
+
     const definitionIds = schemeComponents.map((c: any) => c.assessmentDefinitionId);
 
     const assessmentComponents = await prisma.assessmentComponent.findMany({
@@ -334,7 +341,6 @@ export async function GET(req: Request) {
 
       let total = 0;
       let hasAny = false;
-      const schemeMax = schemeComponents.reduce((sum: number, sc: any) => sum + (Number(sc.weightOutOf ?? 0) || 0), 0);
 
       for (const sc of schemeComponents) {
         const componentIds = definitionToComponentIds.get(sc.assessmentDefinitionId) ?? [];
@@ -378,46 +384,53 @@ export async function GET(req: Request) {
       }
 
       if (!hasAny) return null;
-      if (schemeMax <= 0) return round2(total);
 
-      return round2((total / schemeMax) * 100);
+      // Keep the value on the exact report-scheme scale. For example,
+      // O-Level midterm can remain 0-3, while EOT can remain 0-100.
+      return round2(total);
     }
 
-    const rows = enrollments.map((enrollment) => {
-      const studentName = [
-        enrollment.student.firstName,
-        enrollment.student.lastName,
-        enrollment.student.otherNames,
-      ]
-        .filter(Boolean)
-        .join(" ");
+    const rows = enrollments
+      .map((enrollment) => {
+        const studentName = [
+          enrollment.student.firstName,
+          enrollment.student.otherNames,
+          enrollment.student.lastName,
+        ]
+          .filter(Boolean)
+          .join(" ");
 
-      const enrolledSet = new Set(enrollment.subjects.map((s) => s.subjectId));
-      const marks: string[] = [];
-      const numericMarks: number[] = [];
+        const enrolledSet = new Set(enrollment.subjects.map((s) => s.subjectId));
+        const marks: Array<{ text: string; isEnrolled: boolean }> = [];
+        const numericMarks: number[] = [];
 
-      for (const subject of subjectRows) {
-        if (!enrolledSet.has(subject.id)) {
-          marks.push("-");
-          continue;
+        for (const subject of subjectRows) {
+          if (!enrolledSet.has(subject.id)) {
+            marks.push({ text: "NE", isEnrolled: false });
+            continue;
+          }
+
+          // A learner who is enrolled for a subject must have that subject count
+          // in the average. If no mark has been entered yet, display a dash but
+          // count it as zero when calculating the average.
+          const mark = computeSubjectMark(enrollment.id, subject.id);
+          if (mark === null) {
+            marks.push({ text: "-", isEnrolled: true });
+            numericMarks.push(0);
+          } else {
+            marks.push({ text: formatMark(mark), isEnrolled: true });
+            numericMarks.push(mark);
+          }
         }
 
-        const mark = computeSubjectMark(enrollment.id, subject.id);
-        if (mark === null) {
-          marks.push("-");
-        } else {
-          marks.push(formatMark(mark));
-          numericMarks.push(mark);
-        }
-      }
+        const average =
+          numericMarks.length > 0
+            ? formatMark(round2(numericMarks.reduce((a, b) => a + b, 0) / numericMarks.length))
+            : "-";
 
-      const average =
-        numericMarks.length > 0
-          ? formatMark(round2(numericMarks.reduce((a, b) => a + b, 0) / numericMarks.length))
-          : "-";
-
-      return { studentName, marks, average };
-    });
+        return { studentName, marks, average };
+      })
+      .sort((a, b) => a.studentName.localeCompare(b.studentName, undefined, { sensitivity: "base" }));
 
     const PDFDocument = (await import("pdfkit/js/pdfkit.standalone")).default;
     const doc: any = new PDFDocument({
@@ -434,7 +447,7 @@ export async function GET(req: Request) {
     const usableWidth = pageWidth - 36;
 
     const title = "ZZANA CHRISTIAN HIGH SCHOOL";
-    const subtitle = `SUMMARY SHEET • ${cls.name} • ${term.name} • ${year.name} • ${reportType.replace("_", " ")}`;
+    const subtitle = `SUMMARY SHEET • ${cls.name} • ${term.name} • ${year.name} • ${reportType.replace("_", " ")} • Out of ${formatMark(schemeTotalOutOf)}`;
 
     const nameColWidth = 150;
     const avgColWidth = 42;
@@ -442,19 +455,19 @@ export async function GET(req: Request) {
     const subjectAreaWidth = usableWidth - nameColWidth - avgColWidth;
     const subjectColWidth = subjectAreaWidth / subjectCount;
 
-    const useAbbrev = subjectColWidth < 42;
     const displayedHeaders = subjectRows.map((s) => ({
       id: s.id,
-      label: useAbbrev ? abbreviateSubject(s.name) : s.name,
+      label: abbreviateSubject(s.name),
+      fullName: s.name,
     }));
 
     const titleFont = 14;
     const subtitleFont = 9;
-    const headerFont = useAbbrev ? 6.5 : subjectColWidth < 52 ? 7 : 8;
-    const bodyFont = subjectColWidth < 42 ? 6.8 : 7.8;
+    const headerFont = subjectColWidth < 32 ? 6.2 : subjectColWidth < 42 ? 6.7 : 7.2;
+    const bodyFont = subjectColWidth < 32 ? 6.5 : subjectColWidth < 42 ? 6.8 : 7.8;
     const studentFont = subjectColWidth < 42 ? 7 : 8.2;
 
-    const headerHeight = useAbbrev ? 20 : subjectColWidth < 52 ? 24 : 28;
+    const headerHeight = 20;
     const rowHeight = 16;
 
     function drawHeader() {
@@ -516,11 +529,19 @@ export async function GET(req: Request) {
       x += nameColWidth;
 
       for (const mark of row.marks) {
-        doc.rect(x, y, subjectColWidth, rowHeight).stroke();
-        doc.font("Helvetica").fontSize(bodyFont).fillColor("#111827").text(mark, x + 1, y + 4, {
-          width: subjectColWidth - 2,
-          align: "center",
-        });
+        if (!mark.isEnrolled) {
+          doc.rect(x, y, subjectColWidth, rowHeight).fillAndStroke("#e5e7eb", "#111827");
+          doc.font("Helvetica").fontSize(bodyFont).fillColor("#6b7280").text(mark.text, x + 1, y + 4, {
+            width: subjectColWidth - 2,
+            align: "center",
+          });
+        } else {
+          doc.rect(x, y, subjectColWidth, rowHeight).stroke();
+          doc.font("Helvetica").fontSize(bodyFont).fillColor("#111827").text(mark.text, x + 1, y + 4, {
+            width: subjectColWidth - 2,
+            align: "center",
+          });
+        }
         x += subjectColWidth;
       }
 
@@ -533,27 +554,43 @@ export async function GET(req: Request) {
       y += rowHeight;
     }
 
-    if (useAbbrev) {
-      const legend = displayedHeaders
-        .map((h, i) => `${h.label} = ${subjectRows[i].name}`)
-        .join("   •   ");
+    if (displayedHeaders.length) {
+      const keyColumns = displayedHeaders.length > 10 ? 2 : 1;
+      const keyRows = Math.ceil(displayedHeaders.length / keyColumns);
+      const keyLineHeight = 9;
+      const keyHeight = 13 + keyRows * keyLineHeight;
+      const keyColWidth = usableWidth / keyColumns;
 
-      if (y + 24 > pageHeight - 18) {
+      if (y + keyHeight > pageHeight - 18) {
         doc.addPage({ size: "A4", layout: "landscape", margin: 18 });
         y = 20;
       } else {
         y += 8;
       }
 
-      doc.font("Helvetica-Bold").fontSize(8).fillColor("#111827").text("Subject Key", left, y, {
+      doc.font("Helvetica-Bold").fontSize(8).fillColor("#111827").text("Subject Abbreviation Key", left, y, {
         width: usableWidth,
         align: "left",
       });
 
-      doc.font("Helvetica").fontSize(7).fillColor("#374151").text(legend, left, y + 10, {
-        width: usableWidth,
+      doc.font("Helvetica").fontSize(6.7).fillColor("#6b7280").text("NE = NOT ENROLLED FOR THE SUBJECT. A dash (-) means enrolled but no mark entered.", left + 120, y, {
+        width: usableWidth - 120,
         align: "left",
       });
+
+      for (let i = 0; i < displayedHeaders.length; i++) {
+        const item = displayedHeaders[i];
+        const col = Math.floor(i / keyRows);
+        const row = i % keyRows;
+        const keyX = left + col * keyColWidth;
+        const keyY = y + 11 + row * keyLineHeight;
+
+        doc.font("Helvetica").fontSize(6.7).fillColor("#374151").text(`${item.label} = ${item.fullName}`, keyX, keyY, {
+          width: keyColWidth - 8,
+          align: "left",
+          lineBreak: false,
+        });
+      }
     }
 
     doc.end();

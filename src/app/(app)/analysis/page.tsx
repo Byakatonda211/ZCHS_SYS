@@ -20,6 +20,10 @@ type SubjectOption = {
 type SimpleOption = {
   id: string;
   name: string;
+  level?: string | null;
+  order?: number | null;
+  academicYearId?: string | null;
+  isCurrent?: boolean | null;
 };
 
 type AnalyticsResponse = {
@@ -38,6 +42,7 @@ type AnalyticsResponse = {
     subjectName: string;
     reportType: string;
     totalStudents: number;
+    totalOutOf?: number | null;
   };
 };
 
@@ -98,6 +103,45 @@ async function readError(res: Response) {
   return text || "Request failed";
 }
 
+function classNumber(name: string) {
+  const clean = String(name || "").trim();
+  const match = clean.match(/S\s*\.?\s*([1-6])/i) || clean.match(/Senior\s*([1-6])/i);
+  return match ? Number(match[1]) : 999;
+}
+
+function isSecondaryClass(cls: SimpleOption) {
+  const level = String(cls.level || "").toUpperCase();
+  if (level === "O_LEVEL" || level === "A_LEVEL") return true;
+  const name = String(cls.name || "").trim();
+  return /^S\s*\.?\s*[1-6](?:\s|$)/i.test(name) || /^Senior\s*[1-6](?:\s|$)/i.test(name);
+}
+
+function sortSecondaryClasses(list: SimpleOption[]) {
+  return [...list]
+    .filter(isSecondaryClass)
+    .sort((a, b) => {
+      const byNumber = classNumber(a.name) - classNumber(b.name);
+      if (byNumber !== 0) return byNumber;
+      const byOrder = Number(a.order ?? 999) - Number(b.order ?? 999);
+      if (byOrder !== 0) return byOrder;
+      return String(a.name || "").localeCompare(String(b.name || ""), undefined, {
+        numeric: true,
+        sensitivity: "base",
+      });
+    });
+}
+
+async function fetchClassesFallback(localClasses: SimpleOption[]) {
+  try {
+    const res = await fetch("/api/classes", { cache: "no-store" });
+    if (!res.ok) return localClasses;
+    const json = await res.json().catch(() => []);
+    return Array.isArray(json) ? json : localClasses;
+  } catch {
+    return localClasses;
+  }
+}
+
 export default function AnalysisPage() {
   const [mounted, setMounted] = React.useState(false);
 
@@ -119,22 +163,35 @@ export default function AnalysisPage() {
   const [error, setError] = React.useState("");
 
   React.useEffect(() => {
-    setMounted(true);
+    let cancelled = false;
 
-    const allYears = getAcademicYears() ?? [];
-    const allTerms = getTerms() ?? [];
-    const allClasses = getClasses() ?? [];
+    async function boot() {
+      const allYears = getAcademicYears() ?? [];
+      const allTerms = getTerms() ?? [];
+      const localClasses = getClasses() ?? [];
+      const apiOrLocalClasses = await fetchClassesFallback(localClasses);
+      const secondaryClasses = sortSecondaryClasses(apiOrLocalClasses);
 
-    const currentYear = getCurrentAcademicYear();
-    const currentTerm = getCurrentTerm();
+      const currentYear = getCurrentAcademicYear();
+      const currentTerm = getCurrentTerm();
 
-    setYears(allYears);
-    setTerms(allTerms);
-    setClasses(allClasses);
+      if (cancelled) return;
 
-    setYearId(currentYear?.id ?? allYears[0]?.id ?? "");
-    setTermId(currentTerm?.id ?? allTerms[0]?.id ?? "");
-    setClassId(allClasses[0]?.id ?? "");
+      setYears(allYears);
+      setTerms(allTerms);
+      setClasses(secondaryClasses);
+
+      setYearId(currentYear?.id ?? allYears[0]?.id ?? "");
+      setTermId(currentTerm?.id ?? allTerms[0]?.id ?? "");
+      setClassId(secondaryClasses[0]?.id ?? "");
+      setMounted(true);
+    }
+
+    boot();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const selectedClass = React.useMemo(
@@ -147,10 +204,30 @@ export default function AnalysisPage() {
     [years, yearId]
   );
 
+  const filteredTerms = React.useMemo(() => {
+    const list = terms || [];
+
+    if (!yearId) return list;
+
+    const termsWithYear = list.filter((t) => t.academicYearId);
+    if (termsWithYear.length === 0) return list;
+
+    return list.filter((t) => t.academicYearId === yearId);
+  }, [terms, yearId]);
+
   const selectedTerm = React.useMemo(
-    () => terms.find((t) => t.id === termId) ?? null,
-    [terms, termId]
+    () => filteredTerms.find((t) => t.id === termId) ?? null,
+    [filteredTerms, termId]
   );
+
+  React.useEffect(() => {
+    if (!mounted) return;
+
+    setTermId((prev) => {
+      if (prev && filteredTerms.some((t) => t.id === prev)) return prev;
+      return filteredTerms.find((t) => t.isCurrent)?.id ?? filteredTerms[0]?.id ?? "";
+    });
+  }, [mounted, filteredTerms]);
 
   React.useEffect(() => {
     let ignore = false;
@@ -297,7 +374,7 @@ export default function AnalysisPage() {
           title="Performance Analysis"
           subtitle="Grade summaries by class and subject"
         />
-        <div className="p-4 grid grid-cols-1 md:grid-cols-5 gap-3">
+        <div className="p-4 grid grid-cols-1 md:grid-cols-7 gap-3">
           <Select value={classId} onChange={(e) => setClassId(e.target.value)}>
             {classes.length === 0 ? (
               <option value="">No classes available</option>
@@ -305,6 +382,34 @@ export default function AnalysisPage() {
               classes.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
+                </option>
+              ))
+            )}
+          </Select>
+
+          <Select value={yearId} onChange={(e) => setYearId(e.target.value)}>
+            {years.length === 0 ? (
+              <option value="">No academic years</option>
+            ) : (
+              years.map((y) => (
+                <option key={y.id} value={y.id}>
+                  {y.name}
+                </option>
+              ))
+            )}
+          </Select>
+
+          <Select
+            value={termId}
+            onChange={(e) => setTermId(e.target.value)}
+            disabled={!yearId || filteredTerms.length === 0}
+          >
+            {filteredTerms.length === 0 ? (
+              <option value="">No terms available</option>
+            ) : (
+              filteredTerms.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
                 </option>
               ))
             )}
@@ -363,8 +468,8 @@ export default function AnalysisPage() {
         </Card>
       ) : null}
 
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
-        {(data?.gradeOrder ?? ["A", "B", "C", "D", "E", "O", "F"]).map((grade) => (
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+        {(data?.gradeOrder ?? ["A", "B", "C", "D", "E"]).map((grade) => (
           <Card key={grade} className={`p-4 shadow-sm ${gradeCardClass(grade)}`}>
             <div className={`text-sm font-semibold ${gradeTextClass(grade)}`}>Grade {grade}</div>
             <div className="mt-2 text-3xl font-bold text-slate-900">{data?.summary?.[grade] ?? 0}</div>
@@ -378,7 +483,7 @@ export default function AnalysisPage() {
           title="Ranked Summary"
           subtitle={
             data
-              ? `${data.meta.className} • ${data.meta.subjectName} • ${data.meta.reportType}`
+              ? `${data.meta.className} • ${data.meta.subjectName} • ${data.meta.reportType}${data.meta.totalOutOf ? ` • Out of ${data.meta.totalOutOf}` : ""}`
               : "No analysis loaded yet"
           }
           right={<Badge>{data?.meta?.totalStudents ?? 0}</Badge>}
@@ -390,7 +495,7 @@ export default function AnalysisPage() {
                 <th className="text-left p-3 font-bold">#</th>
                 <th className="text-left p-3 font-bold">Student</th>
                 <th className="text-left p-3 font-bold">Student No</th>
-                <th className="text-left p-3 font-bold">Total</th>
+                <th className="text-left p-3 font-bold">Total{data?.meta?.totalOutOf ? ` / ${data.meta.totalOutOf}` : ""}</th>
                 <th className="text-left p-3 font-bold">Grade</th>
               </tr>
             </thead>
