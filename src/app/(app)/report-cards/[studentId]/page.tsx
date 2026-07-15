@@ -461,6 +461,17 @@ function sumNumbers(values: Array<number | null | undefined>) {
   return round2(nums.reduce((sum, v) => sum + v, 0));
 }
 
+function schemeMaximum(scheme: Pick<SchemeApiRow, "components"> | null | undefined) {
+  return (scheme?.components || []).reduce(
+    (sum, component) => sum + (Number(component.weightOutOf ?? 0) || 0),
+    0
+  );
+}
+
+function scoreForAverage(value: number | null | undefined) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
 function paperDisplayName(paper: { name?: string | null; code?: string | null }) {
   const code = String(paper.code || "").trim();
   const name = String(paper.name || "").trim();
@@ -853,13 +864,16 @@ export default function StudentReportCardPage() {
                 })
               );
 
-              // For A-Level end-of-term reports, the subject total should match the
-              // visible paper totals on the report. Therefore, round each paper total first,
-              // then average those rounded paper totals, and finally round the average.
-              const subjectTotalRaw =
-                reportType === "A_EOT"
-                  ? averageRawNumbers(paperRows.map((p) => roundHalfUpToWhole(p.total)))
-                  : averageRawNumbers(paperRows.map((p) => p.total));
+              // Average every active paper for the subject. Missing paper marks still
+              // display as dashes in the table, but they count as 0 in the subject average.
+              const paperTotalsForAverage = paperRows.map((p) => {
+                if (reportType === "A_EOT") return roundHalfUpToWhole(p.total) ?? 0;
+                return scoreForAverage(p.total);
+              });
+              const subjectTotalRaw = paperTotalsForAverage.length
+                ? paperTotalsForAverage.reduce((sum, value) => sum + value, 0) /
+                  paperTotalsForAverage.length
+                : null;
               const subjectTotal =
                 reportType === "A_EOT"
                   ? roundHalfUpToWhole(subjectTotalRaw)
@@ -913,13 +927,16 @@ export default function StudentReportCardPage() {
           });
         }
 
-        const totals = provisionalRows
-          .map((r) => r.total)
-          .filter((x): x is number => typeof x === "number");
+        // Overall average is based on all enrolled subjects. Missing subject marks
+        // display as dashes, but count as 0 in the final average.
+        const totalsForAverage = provisionalRows.map((r) => scoreForAverage(r.total));
 
         const overallAverage =
-          totals.length > 0
-            ? round2(totals.reduce((sum, v) => sum + v, 0) / totals.length)
+          totalsForAverage.length > 0
+            ? round2(
+                totalsForAverage.reduce((sum, v) => sum + v, 0) /
+                  totalsForAverage.length
+              )
             : null;
 
         const overallGrade = gradeScore(
@@ -998,14 +1015,21 @@ export default function StudentReportCardPage() {
   const className = activeEnrollment?.class?.name || "—";
   const reportHeading = getReportHeading(reportType, termName || termId, academicYearName || yearId);
 
-  const totals = rows
-    .map((r) => r.total)
-    .filter((x): x is number => typeof x === "number");
+  const totalsForAverage = rows.map((r) => scoreForAverage(r.total));
 
   const overallAverage =
-    totals.length > 0
-      ? round2(totals.reduce((sum, v) => sum + v, 0) / totals.length)
+    totalsForAverage.length > 0
+      ? round2(
+          totalsForAverage.reduce((sum, v) => sum + v, 0) /
+            totalsForAverage.length
+        )
       : null;
+
+  const schemeMaxValue = schemeMaximum(scheme);
+  const overallProgressWidth =
+    schemeMaxValue > 0 && overallAverage !== null
+      ? Math.max(0, Math.min(100, (Number(overallAverage) / schemeMaxValue) * 100))
+      : 0;
 
   const overallGrade = gradeScore(overallAverage, gradeDescriptors);
 
@@ -1014,14 +1038,10 @@ export default function StudentReportCardPage() {
     : null;
 
   const bestRow =
-    rows
-      .filter((r) => typeof r.total === "number")
-      .sort((a, b) => (b.total as number) - (a.total as number))[0] || null;
+    [...rows].sort((a, b) => scoreForAverage(b.total) - scoreForAverage(a.total))[0] || null;
 
   const lowestRow =
-    rows
-      .filter((r) => typeof r.total === "number")
-      .sort((a, b) => (a.total as number) - (b.total as number))[0] || null;
+    [...rows].sort((a, b) => scoreForAverage(a.total) - scoreForAverage(b.total))[0] || null;
 
   async function handleDownloadPdf() {
     if (!student || !scheme) return;
@@ -2177,7 +2197,7 @@ export default function StudentReportCardPage() {
       ?.achievementLevel || "—";
 
   return (
-    <div className="mx-auto max-w-6xl space-y-4 p-4">
+    <div className="mx-auto max-w-6xl space-y-4 p-2 sm:p-4">
       <Card>
         <CardHeader
           title="Student Report Card"
@@ -2202,10 +2222,10 @@ export default function StudentReportCardPage() {
         />
       </Card>
 
-      <div className="mx-auto w-full max-w-[210mm] overflow-hidden rounded-[28px] border border-slate-200 bg-[#fbfaf6] p-5 text-slate-900 shadow-xl">
+      <div className="mx-auto w-full max-w-[210mm] overflow-hidden rounded-[22px] border border-slate-200 bg-[#fbfaf6] p-3 text-slate-900 shadow-xl sm:rounded-[28px] sm:p-5">
         <div className="h-2 rounded-t-[22px] bg-[#12264a] border-b-4 border-[#9f1f2d]" />
 
-        <div className="mt-4 grid grid-cols-[110px_1fr_140px] items-center gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mt-4 grid grid-cols-1 items-center gap-4 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm md:grid-cols-[110px_1fr_140px] md:p-4">
           <div className="flex justify-center">
             <div className="flex h-24 w-24 items-center justify-center rounded-full border-[6px] border-[#9f1f2d] bg-white shadow-inner">
               <img src="/report-assets/badge.png" alt="School badge" className="h-[105%] w-[105%] object-contain" />
@@ -2215,7 +2235,7 @@ export default function StudentReportCardPage() {
             <div className="text-[11px] font-black uppercase tracking-[0.28em] text-[#9f1f2d]">
               {isALevelReport ? "A-Level Academic Report" : "O-Level Academic Report"}
             </div>
-            <div className="mt-1 text-3xl font-black tracking-tight text-[#12264a]">
+            <div className="mt-1 text-2xl font-black tracking-tight text-[#12264a] sm:text-3xl">
               {SCHOOL_NAME}
             </div>
             <div className="mt-1 text-[12px] font-extrabold uppercase tracking-[0.26em] text-[#12264a]">
@@ -2233,20 +2253,20 @@ export default function StudentReportCardPage() {
           </div>
         </div>
 
-        <div className="my-4 grid grid-cols-[1fr_auto_1fr] items-center gap-4">
+        <div className="my-4 grid grid-cols-1 items-center gap-3 md:grid-cols-[1fr_auto_1fr] md:gap-4">
           <div className="h-[5px] border-y border-[#12264a] bg-[#9f1f2d]" />
-          <h2 className="m-0 text-center text-2xl font-black uppercase tracking-[0.16em] text-[#12264a]">
+          <h2 className="m-0 text-center text-lg font-black uppercase tracking-[0.12em] text-[#12264a] sm:text-2xl sm:tracking-[0.16em]">
             {reportHeading}
           </h2>
           <div className="h-[5px] border-y border-[#12264a] bg-[#9f1f2d]" />
         </div>
 
-        <div className="grid grid-cols-[1.65fr_1fr] gap-4">
-          <div className="grid grid-cols-[92px_1fr] items-center gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.65fr_1fr]">
+          <div className="grid grid-cols-1 items-center gap-4 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:grid-cols-[92px_1fr] sm:p-4">
             <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-full border-4 border-[#9f1f2d] bg-slate-100">
               <img src="/report-assets/student-profile.png" alt="Student profile" className="h-full w-full object-contain" />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <ReportValueInline label="Name" value={fullName} />
               <ReportValueInline label="Student No" value={studentNo} />
               <ReportValueInline label="Class" value={className} />
@@ -2254,12 +2274,17 @@ export default function StudentReportCardPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="border-r border-slate-200 pr-3">
+          <div className="grid grid-cols-1 gap-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:grid-cols-2 sm:p-4">
+            <div className="border-b border-slate-200 pb-3 sm:border-b-0 sm:border-r sm:pb-0 sm:pr-3">
               <div className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Overall Average</div>
               <div className="mt-2 text-4xl font-black text-[#12264a]">{formatPdfMark(overallAverage, reportType)}</div>
+              {schemeMaxValue > 0 && (
+                <div className="mt-1 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">
+                  Out of {formatMark(schemeMaxValue)}
+                </div>
+              )}
               <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
-                <div className="h-full rounded-full bg-[#12264a]" style={{ width: `${Math.max(0, Math.min(100, Number(overallAverage || 0)))}%` }} />
+                <div className="h-full rounded-full bg-[#12264a]" style={{ width: `${overallProgressWidth}%` }} />
               </div>
             </div>
             <div className="text-center">
@@ -2270,7 +2295,7 @@ export default function StudentReportCardPage() {
           </div>
         </div>
 
-        <div className={`mt-4 grid gap-3 ${isALevelReport ? "grid-cols-5" : "grid-cols-4"}`}>
+        <div className={`mt-4 grid gap-3 ${isALevelReport ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-5" : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-4"}`}>
           <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
             <div className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">Overall Average</div>
             <div className="mt-1 text-2xl font-black text-slate-900">{formatPdfMark(overallAverage, reportType)}</div>
@@ -2297,12 +2322,12 @@ export default function StudentReportCardPage() {
           </div>
         </div>
 
-        <div className="mt-4 grid grid-cols-[1fr_260px] gap-4">
-          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-[1fr_260px]">
+          <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
             <div className="bg-[#12264a] px-4 py-3 text-sm font-black uppercase tracking-[0.18em] text-white">
               Subject Achievement Level
             </div>
-            <table className="w-full table-fixed border-collapse text-[11px]">
+            <table className="min-w-[760px] w-full table-fixed border-collapse text-[11px]">
               <thead className="bg-slate-100 text-slate-800">
                 <tr>
                   <th className="border border-slate-200 px-2 py-2 text-left font-black">Subject</th>
@@ -2405,19 +2430,19 @@ export default function StudentReportCardPage() {
           </div>
         </div>
 
-        <div className="mt-4 grid grid-cols-[1fr_260px] gap-4">
+        <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-[1fr_260px]">
           <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
             <div className="bg-[#12264a] px-4 py-3 text-sm font-black uppercase tracking-[0.16em] text-white">Head Teacher&apos;s Comment</div>
             <div className="px-4 py-3 text-sm leading-6 text-slate-700">{headTeacherComment || "—"}</div>
           </div>
           <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="flex h-full flex-col justify-around gap-4">
+            <div className="flex min-h-40 flex-col justify-around gap-4">
               <div className="text-center">
-                <div className="mx-auto h-8 w-44 border-b border-slate-400" />
+                <div className="mx-auto h-10 w-48 border-b border-slate-400" />
                 <div className="mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-600">Head Teacher</div>
               </div>
               <div className="text-center">
-                <div className="mx-auto h-8 w-44 border-b border-slate-400" />
+                <div className="mx-auto h-10 w-48 border-b border-slate-400" />
                 <div className="mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-600">Class Teacher</div>
               </div>
             </div>

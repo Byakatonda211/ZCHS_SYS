@@ -11,6 +11,7 @@ import {
   formatPdfMark,
   getALevelPoints,
   getReportHeading,
+  schemeMaximum,
   toShortAssessmentLabel,
 } from "@/lib/report-card-data";
 
@@ -30,6 +31,36 @@ function esc(value: unknown) {
     .replace(/>/g, "&gt;")
     .replace(/\"/g, "&quot;")
     .replace(/'/g, "&#039;");
+}
+
+function iconSvg(name: string) {
+  const common = 'viewBox="0 0 24 24" aria-hidden="true" class="icon-svg"';
+  switch (name) {
+    case "average":
+      return `<svg ${common}><path d="M4 19V9"/><path d="M10 19V5"/><path d="M16 19v-7"/><path d="M3 19h18"/></svg>`;
+    case "grade":
+      return `<svg ${common}><path d="M12 3l2.7 5.5 6.1.9-4.4 4.3 1 6.1L12 16.9 6.6 19.8l1-6.1L3.2 9.4l6.1-.9L12 3z"/></svg>`;
+    case "points":
+      return `<svg ${common}><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg>`;
+    case "best":
+      return `<svg ${common}><path d="M12 19V5"/><path d="M6 11l6-6 6 6"/></svg>`;
+    case "low":
+      return `<svg ${common}><path d="M12 5v14"/><path d="M6 13l6 6 6-6"/></svg>`;
+    case "results":
+      return `<svg ${common}><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8"/><path d="M8 13h8"/><path d="M8 17h5"/></svg>`;
+    case "headteacher":
+      return `<svg ${common}><path d="M12 3l7 4v5c0 4-2.7 7.4-7 9-4.3-1.6-7-5-7-9V7l7-4z"/><path d="M9 12l2 2 4-5"/></svg>`;
+    case "snapshot":
+      return `<svg ${common}><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>`;
+    case "distribution":
+      return `<svg ${common}><path d="M4 18h16"/><rect x="6" y="10" width="3" height="8"/><rect x="11" y="6" width="3" height="12"/><rect x="16" y="13" width="3" height="5"/></svg>`;
+    case "weights":
+      return `<svg ${common}><path d="M6 20h12"/><path d="M12 4v16"/><path d="M7 7h10"/><path d="M7 7l-3 6h6l-3-6z"/><path d="M17 7l-3 6h6l-3-6z"/></svg>`;
+    case "scale":
+      return `<svg ${common}><path d="M4 19h16"/><path d="M7 15l3-3 3 2 4-6"/><path d="M17 8h3v3"/></svg>`;
+    default:
+      return `<svg ${common}><circle cx="12" cy="12" r="8"/></svg>`;
+  }
 }
 
 const dataUriCache = new Map<string, string>();
@@ -139,9 +170,21 @@ function descriptorForGrade(payload: StudentReportPayload, grade: string) {
   return row?.achievementLevel || "—";
 }
 
-function safeScore(value: number | null) {
-  if (value === null || Number.isNaN(Number(value))) return 0;
-  return Math.max(0, Math.min(100, Number(value)));
+function clampPercent(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, value));
+}
+
+function progressPercent(payload: StudentReportPayload) {
+  const average = Number(payload.overallAverage);
+  const max = schemeMaximum(payload.scheme);
+  if (!Number.isFinite(average) || max <= 0) return 0;
+  return Math.round(clampPercent((average / max) * 100));
+}
+
+function scoreScaleLabel(payload: StudentReportPayload) {
+  const max = schemeMaximum(payload.scheme);
+  return max > 0 ? `Out of ${formatMark(max)}` : "";
 }
 
 function totalSubjects(payload: StudentReportPayload) {
@@ -176,25 +219,25 @@ function statCards(payload: StudentReportPayload) {
   const isA = isALevel(payload);
   const cards = [
     {
-      icon: "▣",
+      icon: "average",
       label: "Overall Average",
       value: overall,
       detail: performanceMessage(payload),
     },
     {
-      icon: "★",
+      icon: "grade",
       label: "Final Grade",
       value: grade,
       detail: descriptorForGrade(payload, grade),
     },
     {
-      icon: "▲",
+      icon: "best",
       label: "Best Subject",
       value: best ? formatPdfMark(best.total, payload.reportType) : "—",
       detail: best ? best.subjectName : "—",
     },
     {
-      icon: "▼",
+      icon: "low",
       label: "Lowest Subject",
       value: lowest ? formatPdfMark(lowest.total, payload.reportType) : "—",
       detail: lowest ? lowest.subjectName : "—",
@@ -203,7 +246,7 @@ function statCards(payload: StudentReportPayload) {
 
   if (isA) {
     cards.splice(2, 0, {
-      icon: "●",
+      icon: "points",
       label: "Overall Points",
       value: String(payload.totalPoints ?? 0),
       detail: "Principal subjects A=5 … E=1",
@@ -214,7 +257,7 @@ function statCards(payload: StudentReportPayload) {
     .map(
       (card) => `
         <div class="stat-card ${card.label === "Overall Points" ? "overall-points-card" : ""}">
-          <div class="stat-icon">${esc(card.icon)}</div>
+          <div class="stat-icon">${iconSvg(card.icon)}</div>
           <div class="stat-label">${esc(card.label)}</div>
           <div class="stat-value">
             ${card.label === "Overall Points"
@@ -387,8 +430,8 @@ function renderOneReport(payload: StudentReportPayload, _index: number) {
   const isA = isALevel(payload);
   const levelClass = isA ? "level-a" : "level-o";
   const density = densityClass(payload);
-  const average = safeScore(payload.overallAverage);
-  const averagePct = Math.round(average);
+  const averagePct = progressPercent(payload);
+  const scoreScale = scoreScaleLabel(payload);
   const heading = getReportHeading(
     payload.reportType,
     payload.termName,
@@ -430,7 +473,7 @@ function renderOneReport(payload: StudentReportPayload, _index: number) {
       <section class="profile-performance-row">
         <div class="profile-card">
           <div class="photo-frame">
-            ${profile ? `<img src="${profile}" alt="Student photo" />` : `<div class="photo-fallback">👤</div>`}
+            ${profile ? `<img src="${profile}" alt="Student photo" />` : `<div class="photo-fallback">PHOTO</div>`}
           </div>
           <div class="profile-grid">
             <div><span>Student Name</span><strong>${esc(fullName(payload))}</strong></div>
@@ -444,6 +487,7 @@ function renderOneReport(payload: StudentReportPayload, _index: number) {
           <div class="score-tile">
             <span>Overall Average</span>
             <strong>${esc(formatPdfMark(payload.overallAverage, payload.reportType))}</strong>
+            ${scoreScale ? `<small class="score-scale">${esc(scoreScale)}</small>` : ""}
             <div class="score-track"><i style="width:${averagePct}%"></i></div>
           </div>
           <div class="grade-showcase">
@@ -460,31 +504,30 @@ function renderOneReport(payload: StudentReportPayload, _index: number) {
 
       <main class="report-body">
         <section class="main-column">
-          <div class="section-title"><span>▦</span><strong>Subject Achievement Level</strong></div>
+          <div class="section-title"><span>${iconSvg("results")}</span><strong>Subject Achievement Level</strong></div>
           <div class="table-wrap">${subjectTable(payload)}</div>
-          ${isA ? `
-            <section class="alevel-lower-row">
-              <div class="comment-box head-box">
-                <div class="comment-title"><span>✪</span><strong>Head Teacher's Comment</strong></div>
-                <p>${esc(payload.headTeacherComment || "—")}</p>
+          <section class="report-lower-row ${isA ? "alevel-lower-row" : "olevel-lower-row"}">
+            <div class="comment-box head-box">
+              <div class="comment-title"><span>${iconSvg("headteacher")}</span><strong>Head Teacher's Comment</strong></div>
+              <p>${esc(payload.headTeacherComment || "—")}</p>
+            </div>
+            <div class="signature-box">
+              <div class="signature-slot">
+                ${signature ? `<img src="${signature}" alt="Signature" />` : ""}
+                <div class="signature-line"></div>
+                <strong>Head Teacher</strong>
               </div>
-              <div class="signature-box">
-                <div class="signature-slot">
-                  ${signature ? `<img src="${signature}" alt="Signature" />` : ""}
-                  <div class="signature-line"></div>
-                  <strong>Head Teacher</strong>
-                </div>
-                <div class="signature-slot">
-                  <div class="signature-line"></div>
-                  <strong>Class Teacher</strong>
-                </div>
+              <div class="signature-slot">
+                <div class="signature-line"></div>
+                <strong>Class Teacher</strong>
               </div>
-            </section>` : ""}
+            </div>
+          </section>
         </section>
 
         <aside class="side-column">
           <div class="side-panel summary-panel">
-            <div class="panel-title"><span>◉</span><strong>Performance Snapshot</strong></div>
+            <div class="panel-title"><span>${iconSvg("snapshot")}</span><strong>Performance Snapshot</strong></div>
             <div class="snapshot-line"><span>Subjects</span><strong>${totalSubjects(payload)}</strong></div>
             ${isA ? `<div class="snapshot-line"><span>Papers</span><strong>${paperCount || "—"}</strong></div>` : ""}
             ${isA ? `<div class="snapshot-line points-total"><span>Total Points</span><strong>${payload.totalPoints ?? 0}</strong></div>` : ""}
@@ -492,41 +535,22 @@ function renderOneReport(payload: StudentReportPayload, _index: number) {
           </div>
 
           <div class="side-panel distribution-panel">
-            <div class="panel-title"><span>◌</span><strong>Grade Distribution</strong></div>
+            <div class="panel-title"><span>${iconSvg("distribution")}</span><strong>Grade Distribution</strong></div>
             ${gradeDistribution(payload)}
           </div>
 
           <div class="side-panel weights-panel">
-            <div class="panel-title"><span>◆</span><strong>Assessment Weights</strong></div>
+            <div class="panel-title"><span>${iconSvg("weights")}</span><strong>Assessment Weights</strong></div>
             <div class="chips">${assessmentChips(payload)}</div>
           </div>
 
           <div class="side-panel scale-panel">
-            <div class="panel-title"><span>◇</span><strong>${isA ? "A-Level Grade & Points" : "Grade Scale"}</strong></div>
+            <div class="panel-title"><span>${iconSvg("scale")}</span><strong>${isA ? "A-Level Grade & Points" : "Grade Scale"}</strong></div>
             ${isA ? pointsLegend() : ""}
             <div class="scale-list">${gradeScale(payload)}</div>
           </div>
         </aside>
       </main>
-
-      ${!isA ? `
-      <section class="bottom-row">
-        <div class="comment-box head-box">
-          <div class="comment-title"><span>✪</span><strong>Head Teacher's Comment</strong></div>
-          <p>${esc(payload.headTeacherComment || "—")}</p>
-        </div>
-        <div class="signature-box">
-          <div class="signature-slot">
-            ${signature ? `<img src="${signature}" alt="Signature" />` : ""}
-            <div class="signature-line"></div>
-            <strong>Head Teacher</strong>
-          </div>
-          <div class="signature-slot">
-            <div class="signature-line"></div>
-            <strong>Class Teacher</strong>
-          </div>
-        </div>
-      </section>` : ""}
 
       <footer class="report-footer">
         <span>IN GOD, WE TRUST</span>
@@ -653,7 +677,8 @@ export function renderModernReportDocument(
     .level-a .score-tile { border-right-color: #d8deea; }
     .score-tile span, .grade-showcase span { font-size: 7pt; text-transform: uppercase; font-weight: 900; letter-spacing: 0.1em; color: #6b5b43; }
     .level-a .score-tile span, .level-a .grade-showcase span { color: #5f6c85; }
-    .score-tile strong { display: block; margin: 1.5mm 0; font-size: 24pt; line-height: 0.95; color: #12264a; }
+    .score-tile strong { display: block; margin: 1.1mm 0 0.5mm; font-size: 24pt; line-height: 0.95; color: #12264a; }
+    .score-scale { display: block; margin-bottom: 1.1mm; font-size: 6.6pt; font-weight: 900; color: #687282; text-transform: uppercase; letter-spacing: 0.08em; }
     .level-a .score-tile strong { color: #12264a; }
     .score-track { width: 100%; height: 3mm; border-radius: 20mm; background: #e8dfce; overflow: hidden; }
     .level-a .score-track { background: #e1e6ef; }
@@ -669,7 +694,7 @@ export function renderModernReportDocument(
     .stat-card { padding: 2.2mm 2.4mm; position: relative; overflow: hidden; }
     .stat-card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 1.2mm; background: #12264a; }
     .level-a .stat-card::before { background: #12264a; }
-    .stat-icon { width: 7mm; height: 7mm; border-radius: 50%; background: #eef2f9; color: #12264a; display: inline-flex; align-items: center; justify-content: center; font-weight: 900; font-size: 9pt; }
+    .stat-icon { width: 7mm; height: 7mm; border-radius: 50%; background: #eef2f9; color: #12264a; display: inline-flex; align-items: center; justify-content: center; padding: 1.25mm; }
     .level-a .stat-icon { background: #eef2f9; color: #12264a; }
     .stat-label { margin-top: 1.2mm; font-size: 6.8pt; text-transform: uppercase; font-weight: 900; letter-spacing: 0.07em; color: #687282; }
     .stat-value { margin-top: 0.7mm; font-size: 14pt; font-weight: 900; color: #172033; }
@@ -679,11 +704,16 @@ export function renderModernReportDocument(
 
     .report-body { min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 52mm; gap: 3.2mm; overflow: hidden; align-self: stretch; }
     .main-column, .side-column { min-height: 0; }
-    .main-column { display: flex; flex-direction: column; }
+    .main-column { display: grid; grid-template-rows: auto minmax(0, 1fr) 25mm; gap: 2mm; min-height: 0; overflow: hidden; }
+    .main-column .section-title { grid-row: 1; }
+    .main-column .table-wrap { grid-row: 2; min-height: 0; overflow: hidden; }
     .side-column { display: flex; flex-direction: column; gap: 2.1mm; overflow: hidden; min-height: 0; }
     .section-title, .panel-title, .comment-title { min-height: 8mm; display: flex; align-items: center; gap: 2mm; padding: 0 3mm; background: #12264a; color: #fff; border-radius: 3mm 3mm 0 0; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 900; font-size: 9.2pt; }
     .level-a .section-title, .level-a .panel-title, .level-a .comment-title { background: #12264a; }
-    .section-title span, .panel-title span, .comment-title span { color: #d19a3a; font-size: 11pt; }
+    .section-title span, .panel-title span, .comment-title span { min-width: 6mm; height: 5.2mm; border-radius: 20mm; background: rgba(255,255,255,0.15); color: #d19a3a; display: inline-flex; align-items: center; justify-content: center; padding: 0.9mm; line-height: 1; }
+    .icon-svg { width: 100%; height: 100%; display: block; }
+    .icon-svg path, .icon-svg circle, .icon-svg rect { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .icon-svg rect, .icon-svg circle { vector-effect: non-scaling-stroke; }
     .level-a .section-title span, .level-a .panel-title span, .level-a .comment-title span { color: #d19a3a; }
     .table-wrap { flex: 1; min-height: 0; border: 1px solid #d4c7ad; border-top: 0; border-radius: 0 0 3mm 3mm; overflow: hidden; background: #fff; }
     .level-a .table-wrap { border-color: #cbd3e0; }
@@ -742,20 +772,18 @@ export function renderModernReportDocument(
     .level-a .scale-row { border-bottom-color: #e5eaf3; }
     .scale-row strong { text-align: right; color: #172033; }
 
-    .bottom-row { display: grid; grid-template-columns: minmax(0, 1fr) 56mm; gap: 3mm; height: 29mm; min-height: 29mm; max-height: 29mm; margin-top: 0; align-items: stretch; position: relative; z-index: 1; }
+    .report-lower-row { grid-row: 3; display: grid; grid-template-columns: minmax(0, 1fr) 44mm; gap: 2mm; min-height: 0; height: 25mm; }
+    .report-lower-row .comment-box,
+    .report-lower-row .signature-box { min-height: 0; overflow: hidden; box-shadow: 0 0.5mm 1.5mm rgba(33, 38, 41, 0.05); }
+    .report-lower-row .comment-title { min-height: 6mm; font-size: 6.7pt; padding: 0 2mm; }
+    .report-lower-row .comment-box p { margin: 1.1mm 1.8mm; font-size: 6.7pt; line-height: 1.18; }
+    .report-lower-row .signature-box { grid-template-rows: 1fr 1fr; padding: 1.2mm; gap: 0.4mm; }
+    .report-lower-row .signature-line { width: 32mm; }
+    .report-lower-row .signature-slot strong { font-size: 5.8pt; }
+    .report-lower-row .signature-slot img { top: -2.2mm; max-width: 38mm; max-height: 15mm; }
     .level-a .report-body { grid-template-columns: minmax(0, 1fr) 50mm; gap: 3mm; overflow: visible; }
-    .level-a .main-column { display: grid; grid-template-rows: auto minmax(0, 1fr) 24mm; gap: 2mm; min-height: 0; overflow: hidden; }
-    .level-a .main-column .section-title { grid-row: 1; }
-    .level-a .main-column .table-wrap { grid-row: 2; min-height: 0; overflow: hidden; }
-    .level-a .alevel-lower-row { grid-row: 3; display: grid; grid-template-columns: minmax(0, 1fr) 42mm; gap: 2mm; min-height: 0; height: 24mm; }
-    .level-a .alevel-lower-row .comment-box,
-    .level-a .alevel-lower-row .signature-box { min-height: 0; overflow: hidden; box-shadow: 0 0.5mm 1.5mm rgba(33, 38, 41, 0.05); }
-    .level-a .alevel-lower-row .comment-title { min-height: 6mm; font-size: 6.7pt; padding: 0 2mm; }
-    .level-a .alevel-lower-row .comment-box p { margin: 1.1mm 1.8mm; font-size: 6.7pt; line-height: 1.18; }
-    .level-a .alevel-lower-row .signature-box { grid-template-rows: 1fr 1fr; padding: 1.2mm; gap: 0.4mm; }
-    .level-a .alevel-lower-row .signature-line { width: 32mm; }
-    .level-a .alevel-lower-row .signature-slot strong { font-size: 5.8pt; }
-    .level-a .alevel-lower-row .signature-slot img { top: -0.8mm; max-width: 28mm; max-height: 9mm; }
+    .level-a .main-column { grid-template-rows: auto minmax(0, 1fr) 24mm; gap: 2mm; }
+    .level-a .report-lower-row { height: 24mm; grid-template-columns: minmax(0, 1fr) 42mm; }
     .level-a .side-column { overflow: hidden; }
     .level-a .scale-panel { flex: 1 1 auto; min-height: 42mm; }
     .level-a .scale-row { font-size: 7.25pt; padding: 0.82mm 0; grid-template-columns: 8mm 1fr 16mm; }
@@ -770,7 +798,7 @@ export function renderModernReportDocument(
     .comment-box p { margin: 1.6mm 2.4mm; font-size: 7.6pt; line-height: 1.25; color: #263345; }
     .signature-box { display: grid; grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; gap: 0.6mm; padding: 1.6mm; }
     .signature-slot { position: relative; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 1mm; }
-    .signature-slot img { position: absolute; top: -0.5mm; max-width: 34mm; max-height: 12mm; object-fit: contain; opacity: 0.9; }
+    .signature-slot img { position: absolute; top: -1.8mm; max-width: 44mm; max-height: 17mm; object-fit: contain; opacity: 0.94; }
     .signature-line { width: 42mm; border-top: 1px solid #8a94a6; }
     .signature-slot strong { font-size: 7pt; text-transform: uppercase; letter-spacing: 0.08em; color: #4b5563; }
 
@@ -790,12 +818,13 @@ export function renderModernReportDocument(
     .density-compact.level-a .scale-panel { min-height: 37mm; }
     .density-compact.level-a .scale-row { font-size: 6.55pt; padding: 0.62mm 0; grid-template-columns: 7.5mm 1fr 15mm; }
     .density-compact .comment { font-size: 6.8pt !important; }
-    .density-compact .bottom-row { height: 27mm; min-height: 27mm; max-height: 27mm; }
-    .density-compact.level-a .main-column { grid-template-rows: auto minmax(0, 1fr) 22mm; gap: 1.6mm; }
-    .density-compact.level-a .alevel-lower-row { height: 22mm; grid-template-columns: minmax(0, 1fr) 39mm; gap: 1.6mm; }
-    .density-compact.level-a .alevel-lower-row .comment-title { min-height: 5.5mm; font-size: 6.1pt; }
-    .density-compact.level-a .alevel-lower-row .comment-box p { font-size: 6.1pt; line-height: 1.14; margin: 1mm 1.4mm; }
-    .density-compact.level-a .alevel-lower-row .signature-line { width: 30mm; }
+    .density-compact .main-column { grid-template-rows: auto minmax(0, 1fr) 23mm; gap: 1.6mm; }
+    .density-compact .report-lower-row { height: 23mm; grid-template-columns: minmax(0, 1fr) 40mm; gap: 1.6mm; }
+    .density-compact .report-lower-row .comment-title { min-height: 5.5mm; font-size: 6.1pt; }
+    .density-compact .report-lower-row .comment-box p { font-size: 6.1pt; line-height: 1.14; margin: 1mm 1.4mm; }
+    .density-compact .report-lower-row .signature-line { width: 30mm; }
+    .density-compact.level-a .main-column { grid-template-rows: auto minmax(0, 1fr) 22mm; }
+    .density-compact.level-a .report-lower-row { height: 22mm; grid-template-columns: minmax(0, 1fr) 39mm; }
 
     .density-compact .comment-box p { font-size: 7.3pt; }
 
@@ -817,7 +846,7 @@ export function renderModernReportDocument(
     .density-tight .grade-showcase strong, .density-ultra .grade-showcase strong { font-size: 21pt; }
     .density-tight .stats-row, .density-ultra .stats-row { min-height: 15mm; gap: 1.6mm; margin: 0; }
     .density-tight .stat-card, .density-ultra .stat-card { padding: 1.3mm 1.6mm; }
-    .density-tight .stat-icon, .density-ultra .stat-icon { width: 5.5mm; height: 5.5mm; font-size: 7pt; }
+    .density-tight .stat-icon, .density-ultra .stat-icon { width: 5.5mm; height: 5.5mm; padding: 1mm; }
     .density-tight .stat-label, .density-ultra .stat-label { font-size: 5.7pt; }
     .density-tight .stat-value, .density-ultra .stat-value { font-size: 10pt; }
     .density-tight .points-out-of, .density-ultra .points-out-of { font-size: 4.8pt; margin-left: 0.35mm; }
@@ -832,14 +861,13 @@ export function renderModernReportDocument(
     .density-tight.level-a .scale-panel, .density-ultra.level-a .scale-panel { min-height: 30mm; }
     .density-tight.level-a .scale-row, .density-ultra.level-a .scale-row { font-size: 5.55pt; padding: 0.42mm 0; grid-template-columns: 6.5mm 1fr 13mm; }
     .density-tight .comment, .density-ultra .comment { font-size: 5.5pt !important; }
-    .density-tight .bottom-row, .density-ultra .bottom-row { height: 24mm; min-height: 24mm; max-height: 24mm; margin-top: 0; gap: 2mm; grid-template-columns: minmax(0, 1fr) 45mm; }
-    .density-tight.level-a .main-column, .density-ultra.level-a .main-column { grid-template-rows: auto minmax(0, 1fr) 19mm; gap: 1.2mm; }
-    .density-tight.level-a .alevel-lower-row, .density-ultra.level-a .alevel-lower-row { height: 19mm; grid-template-columns: minmax(0, 1fr) 34mm; gap: 1.2mm; }
-    .density-tight.level-a .alevel-lower-row .comment-title, .density-ultra.level-a .alevel-lower-row .comment-title { min-height: 4.8mm; font-size: 5.4pt; }
-    .density-tight.level-a .alevel-lower-row .comment-box p, .density-ultra.level-a .alevel-lower-row .comment-box p { font-size: 5.2pt; line-height: 1.12; margin: 0.8mm 1.1mm; }
-    .density-tight.level-a .alevel-lower-row .signature-line, .density-ultra.level-a .alevel-lower-row .signature-line { width: 25mm; }
-    .density-tight.level-a .alevel-lower-row .signature-slot strong, .density-ultra.level-a .alevel-lower-row .signature-slot strong { font-size: 4.8pt; }
-    .density-tight.level-a .alevel-lower-row .signature-slot img, .density-ultra.level-a .alevel-lower-row .signature-slot img { max-width: 22mm; max-height: 7mm; }
+    .density-tight .main-column, .density-ultra .main-column { grid-template-rows: auto minmax(0, 1fr) 20mm; gap: 1.2mm; }
+    .density-tight .report-lower-row, .density-ultra .report-lower-row { height: 20mm; grid-template-columns: minmax(0, 1fr) 35mm; gap: 1.2mm; }
+    .density-tight .report-lower-row .comment-title, .density-ultra .report-lower-row .comment-title { min-height: 4.8mm; font-size: 5.4pt; }
+    .density-tight .report-lower-row .comment-box p, .density-ultra .report-lower-row .comment-box p { font-size: 5.2pt; line-height: 1.12; margin: 0.8mm 1.1mm; }
+    .density-tight .report-lower-row .signature-line, .density-ultra .report-lower-row .signature-line { width: 25mm; }
+    .density-tight .report-lower-row .signature-slot strong, .density-ultra .report-lower-row .signature-slot strong { font-size: 4.8pt; }
+    .density-tight .report-lower-row .signature-slot img, .density-ultra .report-lower-row .signature-slot img { top: -1.4mm; max-width: 29mm; max-height: 10mm; }
 
     .density-tight .comment-title, .density-ultra .comment-title { min-height: 5.5mm; font-size: 6.3pt; }
     .density-tight .comment-box p, .density-ultra .comment-box p { font-size: 6.1pt; line-height: 1.2; margin: 1.4mm 1.8mm; }

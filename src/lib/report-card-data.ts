@@ -161,6 +161,12 @@ export function gradeScore(score: number | null, descriptors: GradeDescriptorRow
   return "—";
 }
 
+
+export function schemeMaximum(scheme: Pick<SchemeApiRow, "components"> | null | undefined) {
+  const components = scheme?.components || [];
+  return components.reduce((sum, c) => sum + (Number(c.weightOutOf ?? 0) || 0), 0);
+}
+
 function normalizeSubjectName(name: string) {
   return String(name || "").trim().toUpperCase().replace(/\s+/g, " ");
 }
@@ -314,28 +320,95 @@ async function loadScheme(reportType: ReportType): Promise<SchemeApiRow> {
   return { id: scheme.id, reportType: scheme.reportType, name: scheme.name, components, gradeDescriptors: descriptors };
 }
 
+function normalizeRemarkGrade(value: unknown) {
+  return String(value ?? "").trim().toUpperCase();
+}
+
+function inRemarkRange(score: number, minScore: unknown, maxScore: unknown) {
+  const min = Number(minScore);
+  const max = Number(maxScore);
+  if (!Number.isFinite(score) || !Number.isFinite(min) || !Number.isFinite(max)) return false;
+  const epsilon = 0.000001;
+  return score + epsilon >= min && score - epsilon <= max;
+}
+
 async function pickRemarkFromDb(params: {
   target: "TEACHER" | "HEADTEACHER";
   reportType: ReportType;
   grade: string;
   score: number | null;
+  schemeMax?: number;
 }) {
   const level = params.reportType.startsWith("A_") ? "A_LEVEL" : "O_LEVEL";
-  if (params.score === null || !Number.isFinite(params.score)) return "—";
+  const cleanGrade = normalizeRemarkGrade(params.grade);
+  const rawScore = Number(params.score);
+  const hasScore = params.score !== null && Number.isFinite(rawScore);
+  const schemeMax = Number(params.schemeMax ?? 0);
 
-  const rule = await prisma.remarkRule.findFirst({
+  const scoreCandidates: number[] = [];
+  if (hasScore) {
+    scoreCandidates.push(rawScore, Math.floor(rawScore), Math.round(rawScore));
+
+    // Some schools keep remark bands on a 0–100 scale even when the active
+    // report scheme total is smaller, for example midterm out of 3. Try both
+    // the scheme-scaled score and its percentage equivalent.
+    if (Number.isFinite(schemeMax) && schemeMax > 0 && Math.abs(schemeMax - 100) > 0.000001) {
+      const pct = (rawScore / schemeMax) * 100;
+      if (Number.isFinite(pct)) {
+        scoreCandidates.push(pct, Math.floor(pct), Math.round(pct));
+      }
+    }
+  }
+
+  const uniqueScores = Array.from(
+    new Set(scoreCandidates.filter((x) => Number.isFinite(x)).map((x) => Number(x.toFixed(6))))
+  );
+
+  const rules = await prisma.remarkRule.findMany({
     where: {
-      type: params.target,
+      type: params.target as any,
       level: level as any,
       isActive: true,
-      OR: [{ grade: params.grade }, { grade: null }],
-      minScore: { lte: Math.floor(params.score) },
-      maxScore: { gte: Math.floor(params.score) },
     },
-    orderBy: [{ grade: "desc" }, { minScore: "desc" }],
-    select: { text: true },
+    orderBy: [{ grade: "desc" }, { minScore: "desc" }, { createdAt: "desc" }],
+    select: {
+      grade: true,
+      minScore: true,
+      maxScore: true,
+      text: true,
+    },
   });
-  return rule?.text || "—";
+
+  const activeRules = rules
+    .map((rule) => ({
+      ...rule,
+      cleanGrade: normalizeRemarkGrade(rule.grade),
+      cleanText: String(rule.text || "").trim(),
+    }))
+    .filter((rule) => rule.cleanText);
+
+  if (!activeRules.length) return "—";
+
+  // First prefer a grade-specific remark, which matches how the web report
+  // picks remarks from the store using the computed grade.
+  if (cleanGrade && cleanGrade !== "—") {
+    const gradeRules = activeRules.filter((rule) => rule.cleanGrade === cleanGrade);
+
+    const gradeAndScoreRule = gradeRules.find((rule) =>
+      uniqueScores.some((score) => inRemarkRange(score, rule.minScore, rule.maxScore))
+    );
+    if (gradeAndScoreRule?.cleanText) return gradeAndScoreRule.cleanText;
+
+    if (gradeRules[0]?.cleanText) return gradeRules[0].cleanText;
+  }
+
+  // Then fall back to score-band remarks where no grade was attached.
+  const scoreRule = activeRules.find((rule) =>
+    !rule.cleanGrade && uniqueScores.some((score) => inRemarkRange(score, rule.minScore, rule.maxScore))
+  );
+  if (scoreRule?.cleanText) return scoreRule.cleanText;
+
+  return "—";
 }
 
 export async function canGenerateClassReports(user: { id: string; role: string }, classId: string) {
@@ -380,6 +453,10 @@ export async function buildStudentReportPayload(params: {
   const { studentId, academicYearId, termId, reportType } = params;
   const isALevelReport = reportType === "A_MID" || reportType === "A_EOT";
   const scheme = await loadScheme(reportType);
+  const schemeMax = scheme.components.reduce(
+    (sum, component) => sum + (Number(component.weightOutOf ?? 0) || 0),
+    0,
+  );
 
   const [student, academicYear, term] = await Promise.all([
     prisma.student.findUnique({
@@ -474,9 +551,16 @@ export async function buildStudentReportPayload(params: {
           return { paperId: paper.id, paperName: paperDisplayName(paper), paperCode: paper.code || null, componentScores, total };
         }));
 
-        const subjectTotalRaw = reportType === "A_EOT"
-          ? averageRawNumbers(paperRows.map((p) => roundHalfUpToWhole(p.total)))
-          : averageRawNumbers(paperRows.map((p) => p.total));
+        // Use every active paper in the subject average. If a paper has no marks,
+        // the report still displays dashes for that paper, but the paper contributes 0
+        // to the subject average instead of being skipped.
+        const paperTotalsForAverage = paperRows.map((p) => {
+          if (reportType === "A_EOT") return roundHalfUpToWhole(p.total) ?? 0;
+          return typeof p.total === "number" && Number.isFinite(p.total) ? p.total : 0;
+        });
+        const subjectTotalRaw = paperTotalsForAverage.length
+          ? paperTotalsForAverage.reduce((sum, value) => sum + value, 0) / paperTotalsForAverage.length
+          : null;
         const subjectTotal = reportType === "A_EOT" ? roundHalfUpToWhole(subjectTotalRaw) : subjectTotalRaw === null ? null : round2(subjectTotalRaw);
         const subjectGrade = gradeSubjectScore(subject.subjectName, subjectTotal, scheme.gradeDescriptors);
 
@@ -509,20 +593,38 @@ export async function buildStudentReportPayload(params: {
     });
   }
 
-  const totals = provisionalRows.map((r) => r.total).filter((x): x is number => typeof x === "number" && Number.isFinite(x));
-  const overallAverage = totals.length > 0 ? round2(totals.reduce((sum, v) => sum + v, 0) / totals.length) : null;
+  // Overall average is based on all enrolled subjects. Missing subject totals are
+  // displayed as dashes in the table, but count as 0 in the final average.
+  const subjectTotalsForAverage = provisionalRows.map((r) =>
+    typeof r.total === "number" && Number.isFinite(r.total) ? r.total : 0,
+  );
+  const overallAverage = subjectTotalsForAverage.length > 0
+    ? round2(subjectTotalsForAverage.reduce((sum, v) => sum + v, 0) / subjectTotalsForAverage.length)
+    : null;
   const overallGrade = gradeScore(overallAverage, scheme.gradeDescriptors);
 
   const rows: SubjectReportRow[] = [];
   for (const row of provisionalRows) {
-    const comment = await pickRemarkFromDb({ target: "TEACHER", reportType, grade: row.grade, score: row.total });
+    const comment = await pickRemarkFromDb({
+      target: "TEACHER",
+      reportType,
+      grade: row.grade,
+      score: row.total,
+      schemeMax,
+    });
     rows.push({ ...row, teacherComment: comment });
   }
 
-  const headTeacherComment = await pickRemarkFromDb({ target: "HEADTEACHER", reportType, grade: overallGrade, score: overallAverage });
+  const headTeacherComment = await pickRemarkFromDb({
+    target: "HEADTEACHER",
+    reportType,
+    grade: overallGrade,
+    score: overallAverage,
+    schemeMax,
+  });
   const totalPoints = isALevelReport ? rows.reduce((sum, row) => sum + getALevelPoints(row.subjectName, row.grade), 0) : null;
-  const bestRow = rows.filter((r) => typeof r.total === "number").sort((a, b) => (b.total as number) - (a.total as number))[0] || null;
-  const lowestRow = rows.filter((r) => typeof r.total === "number").sort((a, b) => (a.total as number) - (b.total as number))[0] || null;
+  const bestRow = [...rows].sort((a, b) => ((b.total ?? 0) as number) - ((a.total ?? 0) as number))[0] || null;
+  const lowestRow = [...rows].sort((a, b) => ((a.total ?? 0) as number) - ((b.total ?? 0) as number))[0] || null;
 
   return {
     student: {
