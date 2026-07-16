@@ -95,6 +95,10 @@ function assetToDataUri(publicPath: string) {
   }
 }
 
+function cssImageVar(dataUri: string) {
+  return dataUri ? `url("${dataUri}")` : "none";
+}
+
 function fullName(payload: StudentReportPayload) {
   const s = payload.student;
   return [s.firstName, s.otherNames, s.lastName]
@@ -207,7 +211,7 @@ function pointsLegend() {
   return `
     <div class="points-legend">
       <span>A = 5</span><span>B = 4</span><span>C = 3</span><span>D = 2</span><span>E = 1</span>
-      <span class="subsidiary-note">GP / Subsidiary Math / ICT: max 1 point</span>
+      <span class="subsidiary-note">GP / Subsidiary Math / ICT: 1 point only for C grade or above</span>
     </div>`;
 }
 
@@ -249,7 +253,7 @@ function statCards(payload: StudentReportPayload) {
       icon: "points",
       label: "Overall Points",
       value: String(payload.totalPoints ?? 0),
-      detail: "Principal subjects A=5 … E=1",
+      detail: "Subsidiary point requires C or above",
     });
   }
 
@@ -399,11 +403,11 @@ function subjectTable(payload: StudentReportPayload) {
                 </th>`,
             )
             .join("")}
-          <th>Total</th>
-          <th>Grade</th>
-          ${pointColumn ? `<th>Pts</th>` : ""}
+          <th class="total-head">Total</th>
+          <th class="grade-head">Grade</th>
+          ${pointColumn ? `<th class="points-head">Pts</th>` : ""}
           <th class="comment-head">Teacher Comment</th>
-          <th>Init.</th>
+          <th class="initials-head">Init.</th>
         </tr>
       </thead>
       <tbody>${subjectRows(payload)}</tbody>
@@ -424,9 +428,9 @@ function remarksPreview(payload: StudentReportPayload) {
 }
 
 function renderOneReport(payload: StudentReportPayload, _index: number) {
-  const badge = assetToDataUri(REPORT_BADGE_PATH);
-  const profile = assetToDataUri(STUDENT_PROFILE_PATH);
-  const signature = assetToDataUri(HEADTEACHER_SIGNATURE_PATH);
+  const hasBadge = Boolean(assetToDataUri(REPORT_BADGE_PATH));
+  const hasProfile = Boolean(assetToDataUri(STUDENT_PROFILE_PATH));
+  const hasSignature = Boolean(assetToDataUri(HEADTEACHER_SIGNATURE_PATH));
   const isA = isALevel(payload);
   const levelClass = isA ? "level-a" : "level-o";
   const density = densityClass(payload);
@@ -446,8 +450,8 @@ function renderOneReport(payload: StudentReportPayload, _index: number) {
 
       <header class="school-header">
         <div class="crest-wrap">
-          <div class="crest-ring">
-            ${badge ? `<img src="${badge}" alt="School badge" />` : `<div class="crest-fallback">ZCHS</div>`}
+          <div class="crest-ring ${hasBadge ? "has-badge" : ""}">
+            ${hasBadge ? "" : `<div class="crest-fallback">ZCHS</div>`}
           </div>
         </div>
         <div class="school-title">
@@ -472,8 +476,8 @@ function renderOneReport(payload: StudentReportPayload, _index: number) {
 
       <section class="profile-performance-row">
         <div class="profile-card">
-          <div class="photo-frame">
-            ${profile ? `<img src="${profile}" alt="Student photo" />` : `<div class="photo-fallback">PHOTO</div>`}
+          <div class="photo-frame ${hasProfile ? "has-profile" : ""}">
+            ${hasProfile ? "" : `<div class="photo-fallback">PHOTO</div>`}
           </div>
           <div class="profile-grid">
             <div><span>Student Name</span><strong>${esc(fullName(payload))}</strong></div>
@@ -512,8 +516,7 @@ function renderOneReport(payload: StudentReportPayload, _index: number) {
               <p>${esc(payload.headTeacherComment || "—")}</p>
             </div>
             <div class="signature-box">
-              <div class="signature-slot">
-                ${signature ? `<img src="${signature}" alt="Signature" />` : ""}
+              <div class="signature-slot ${hasSignature ? "has-signature" : ""}">
                 <div class="signature-line"></div>
                 <strong>Head Teacher</strong>
               </div>
@@ -573,6 +576,11 @@ export function renderModernReportDocument(
     * { box-sizing: border-box; }
     html, body { margin: 0; padding: 0; font-family: Arial, Helvetica, sans-serif; color: #172033; background: #ffffff; }
     body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    :root {
+      --report-badge-img: ${cssImageVar(assetToDataUri(REPORT_BADGE_PATH))};
+      --student-profile-img: ${cssImageVar(assetToDataUri(STUDENT_PROFILE_PATH))};
+      --headteacher-signature-img: ${cssImageVar(assetToDataUri(HEADTEACHER_SIGNATURE_PATH))};
+    }
 
     .report-page {
       width: 210mm;
@@ -617,7 +625,7 @@ export function renderModernReportDocument(
       box-shadow: inset 0 0 0 0.8mm #eef2f9;
     }
     .level-a .crest-ring { border-color: #9f1f2d; box-shadow: inset 0 0 0 0.8mm #eef2f9; }
-    .crest-ring img { width: 112%; height: 112%; max-width: 112%; max-height: 112%; object-fit: contain; }
+    .crest-ring.has-badge::before { content: ""; width: 112%; height: 112%; max-width: 112%; max-height: 112%; background-image: var(--report-badge-img); background-size: contain; background-repeat: no-repeat; background-position: center; display: block; }
     .crest-fallback { font-size: 12px; font-weight: 900; color: #0f4a3a; }
 
     .school-title { text-align: center; min-width: 0; }
@@ -664,7 +672,7 @@ export function renderModernReportDocument(
     .profile-card { display: grid; grid-template-columns: 28mm 1fr; gap: 4mm; align-items: center; padding: 3mm; }
     .photo-frame { width: 25mm; height: 25mm; border-radius: 50%; border: 1mm solid #9f1f2d; background: #f2f5fa; display: flex; align-items: center; justify-content: center; overflow: hidden; }
     .level-a .photo-frame { border-color: #9f1f2d; background: #f2f5fa; }
-    .photo-frame img { width: 100%; height: 100%; object-fit: contain; }
+    .photo-frame.has-profile::before { content: ""; width: 100%; height: 100%; background-image: var(--student-profile-img); background-size: contain; background-repeat: no-repeat; background-position: center; display: block; }
     .photo-fallback { font-size: 20pt; color: #6a7281; }
     .profile-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2mm 3mm; }
     .profile-grid div { border-bottom: 1px solid #e6dfd0; padding-bottom: 1.2mm; }
@@ -729,12 +737,17 @@ export function renderModernReportDocument(
     .subject-head { width: 24%; text-align: left !important; }
     .paper-table .subject-head { width: 20%; }
     .assessment-head { width: 10%; }
-    .comment-head { width: 26%; text-align: left !important; }
-    .points-table .comment-head { width: 21%; }
+    .total-head { width: 8%; }
+    .grade-head { width: 6.5%; }
+    .points-head { width: 5.5%; }
+    .initials-head { width: 4.5%; }
+    .comment-head { width: 28%; text-align: left !important; }
+    .points-table .comment-head { width: 23%; }
     .subject { text-transform: uppercase; }
     .strong { font-weight: 900; }
     .center { text-align: center; }
-    .comment { font-size: 7.7pt !important; color: #334155; }
+    .score-cell { font-size: 9.1pt !important; font-weight: 800; }
+    .comment { font-size: 8.7pt !important; line-height: 1.2; color: #334155; }
     .initials { font-weight: 900; }
     .grade-pill, .grade-mini { display: inline-flex; align-items: center; justify-content: center; min-width: 7mm; height: 6mm; border-radius: 20mm; font-weight: 900; background: #f4e8ea; color: #9f1f2d; border: 1px solid #ddb9bf; }
     .level-a .grade-pill, .level-a .grade-mini { background: #f4e8ea; color: #9f1f2d; border-color: #ddb9bf; }
@@ -768,7 +781,7 @@ export function renderModernReportDocument(
     .points-legend span:not(.subsidiary-note) { flex: 0 0 auto; }
     .points-legend .subsidiary-note { flex: 1 1 100%; border-radius: 1.6mm; color: #334155; background: #f8fafc; font-size: 5.1pt; padding: 0.65mm 0.9mm; }
     .scale-list { padding: 1.0mm 2mm 0; overflow: hidden; }
-    .scale-row { display: grid; grid-template-columns: 8mm 1fr 17mm; gap: 1mm; align-items: center; font-size: 6.7pt; padding: 0.7mm 0; border-bottom: 1px solid #eee5d8; }
+    .scale-row { display: grid; grid-template-columns: 8mm 1fr 17mm; gap: 1mm; align-items: center; font-size: 7.7pt; padding: 0.7mm 0; border-bottom: 1px solid #eee5d8; }
     .level-a .scale-row { border-bottom-color: #e5eaf3; }
     .scale-row strong { text-align: right; color: #172033; }
 
@@ -776,21 +789,22 @@ export function renderModernReportDocument(
     .report-lower-row .comment-box,
     .report-lower-row .signature-box { min-height: 0; overflow: hidden; box-shadow: 0 0.5mm 1.5mm rgba(33, 38, 41, 0.05); }
     .report-lower-row .comment-title { min-height: 6mm; font-size: 6.7pt; padding: 0 2mm; }
-    .report-lower-row .comment-box p { margin: 1.1mm 1.8mm; font-size: 6.7pt; line-height: 1.18; }
+    .report-lower-row .comment-box p { margin: 1.1mm 1.8mm; font-size: 8.2pt; line-height: 1.25; }
     .report-lower-row .signature-box { grid-template-rows: 1fr 1fr; padding: 1.2mm; gap: 0.4mm; }
     .report-lower-row .signature-line { width: 32mm; }
     .report-lower-row .signature-slot strong { font-size: 5.8pt; }
-    .report-lower-row .signature-slot img { top: -2.2mm; max-width: 38mm; max-height: 15mm; }
+    .report-lower-row .signature-slot.has-signature::before { top: -3.2mm; width: 42mm; height: 17mm; }
     .level-a .report-body { grid-template-columns: minmax(0, 1fr) 50mm; gap: 3mm; overflow: visible; }
     .level-a .main-column { grid-template-rows: auto minmax(0, 1fr) 24mm; gap: 2mm; }
     .level-a .report-lower-row { height: 24mm; grid-template-columns: minmax(0, 1fr) 42mm; }
     .level-a .side-column { overflow: hidden; }
     .level-a .scale-panel { flex: 1 1 auto; min-height: 42mm; }
-    .level-a .scale-row { font-size: 7.25pt; padding: 0.82mm 0; grid-template-columns: 8mm 1fr 16mm; }
+    .level-a .scale-row { font-size: 8.1pt; padding: 0.82mm 0; grid-template-columns: 8mm 1fr 16mm; }
     .level-a .results-table th { font-size: 7.4pt; padding: 1.65mm 1mm; }
     .level-a .results-table th small { font-size: 5.7pt; }
     .level-a .results-table td { font-size: 7.35pt; padding: 1.65mm 0.95mm; line-height: 1.16; }
-    .level-a .comment { font-size: 6.65pt !important; line-height: 1.16; }
+    .level-a .score-cell { font-size: 8.35pt !important; }
+    .level-a .comment { font-size: 7.65pt !important; line-height: 1.2; }
 
     .head-box { min-width: 0; overflow: hidden; }
     .signature-box { min-width: 0; overflow: hidden; }
@@ -798,7 +812,7 @@ export function renderModernReportDocument(
     .comment-box p { margin: 1.6mm 2.4mm; font-size: 7.6pt; line-height: 1.25; color: #263345; }
     .signature-box { display: grid; grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; gap: 0.6mm; padding: 1.6mm; }
     .signature-slot { position: relative; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 1mm; }
-    .signature-slot img { position: absolute; top: -1.8mm; max-width: 44mm; max-height: 17mm; object-fit: contain; opacity: 0.94; }
+    .signature-slot.has-signature::before { content: ""; position: absolute; top: -3mm; width: 48mm; height: 19mm; background-image: var(--headteacher-signature-img); background-size: contain; background-repeat: no-repeat; background-position: center; opacity: 0.96; }
     .signature-line { width: 42mm; border-top: 1px solid #8a94a6; }
     .signature-slot strong { font-size: 7pt; text-transform: uppercase; letter-spacing: 0.08em; color: #4b5563; }
 
@@ -816,12 +830,13 @@ export function renderModernReportDocument(
     .density-compact .results-table td { font-size: 7.1pt; padding: 1.15mm 1mm; }
     .density-compact.level-a .results-table td { font-size: 7.0pt; padding: 1.35mm 0.85mm; line-height: 1.14; }
     .density-compact.level-a .scale-panel { min-height: 37mm; }
-    .density-compact.level-a .scale-row { font-size: 6.55pt; padding: 0.62mm 0; grid-template-columns: 7.5mm 1fr 15mm; }
-    .density-compact .comment { font-size: 6.8pt !important; }
+    .density-compact.level-a .scale-row { font-size: 7.25pt; padding: 0.62mm 0; grid-template-columns: 7.5mm 1fr 15mm; }
+    .density-compact .score-cell { font-size: 8.1pt !important; }
+    .density-compact .comment { font-size: 7.8pt !important; }
     .density-compact .main-column { grid-template-rows: auto minmax(0, 1fr) 23mm; gap: 1.6mm; }
     .density-compact .report-lower-row { height: 23mm; grid-template-columns: minmax(0, 1fr) 40mm; gap: 1.6mm; }
     .density-compact .report-lower-row .comment-title { min-height: 5.5mm; font-size: 6.1pt; }
-    .density-compact .report-lower-row .comment-box p { font-size: 6.1pt; line-height: 1.14; margin: 1mm 1.4mm; }
+    .density-compact .report-lower-row .comment-box p { font-size: 7.2pt; line-height: 1.18; margin: 1mm 1.4mm; }
     .density-compact .report-lower-row .signature-line { width: 30mm; }
     .density-compact.level-a .main-column { grid-template-rows: auto minmax(0, 1fr) 22mm; }
     .density-compact.level-a .report-lower-row { height: 22mm; grid-template-columns: minmax(0, 1fr) 39mm; }
@@ -859,15 +874,16 @@ export function renderModernReportDocument(
     .density-tight .results-table td, .density-ultra .results-table td { font-size: 5.9pt; padding: 0.7mm 0.7mm; }
     .density-tight.level-a .results-table td, .density-ultra.level-a .results-table td { font-size: 5.9pt; padding: 0.9mm 0.65mm; line-height: 1.12; }
     .density-tight.level-a .scale-panel, .density-ultra.level-a .scale-panel { min-height: 30mm; }
-    .density-tight.level-a .scale-row, .density-ultra.level-a .scale-row { font-size: 5.55pt; padding: 0.42mm 0; grid-template-columns: 6.5mm 1fr 13mm; }
-    .density-tight .comment, .density-ultra .comment { font-size: 5.5pt !important; }
+    .density-tight.level-a .scale-row, .density-ultra.level-a .scale-row { font-size: 6.35pt; padding: 0.42mm 0; grid-template-columns: 6.5mm 1fr 13mm; }
+    .density-tight .score-cell, .density-ultra .score-cell { font-size: 6.9pt !important; }
+    .density-tight .comment, .density-ultra .comment { font-size: 6.5pt !important; }
     .density-tight .main-column, .density-ultra .main-column { grid-template-rows: auto minmax(0, 1fr) 20mm; gap: 1.2mm; }
     .density-tight .report-lower-row, .density-ultra .report-lower-row { height: 20mm; grid-template-columns: minmax(0, 1fr) 35mm; gap: 1.2mm; }
     .density-tight .report-lower-row .comment-title, .density-ultra .report-lower-row .comment-title { min-height: 4.8mm; font-size: 5.4pt; }
-    .density-tight .report-lower-row .comment-box p, .density-ultra .report-lower-row .comment-box p { font-size: 5.2pt; line-height: 1.12; margin: 0.8mm 1.1mm; }
+    .density-tight .report-lower-row .comment-box p, .density-ultra .report-lower-row .comment-box p { font-size: 6.2pt; line-height: 1.16; margin: 0.8mm 1.1mm; }
     .density-tight .report-lower-row .signature-line, .density-ultra .report-lower-row .signature-line { width: 25mm; }
     .density-tight .report-lower-row .signature-slot strong, .density-ultra .report-lower-row .signature-slot strong { font-size: 4.8pt; }
-    .density-tight .report-lower-row .signature-slot img, .density-ultra .report-lower-row .signature-slot img { top: -1.4mm; max-width: 29mm; max-height: 10mm; }
+    .density-tight .report-lower-row .signature-slot.has-signature::before, .density-ultra .report-lower-row .signature-slot.has-signature::before { top: -2mm; width: 33mm; height: 12mm; }
 
     .density-tight .comment-title, .density-ultra .comment-title { min-height: 5.5mm; font-size: 6.3pt; }
     .density-tight .comment-box p, .density-ultra .comment-box p { font-size: 6.1pt; line-height: 1.2; margin: 1.4mm 1.8mm; }
