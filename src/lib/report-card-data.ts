@@ -186,7 +186,9 @@ export function getALevelPoints(subjectName: string, grade: string) {
   const g = String(grade || "").trim().toUpperCase();
 
   if (isTemporarySubsidiarySubject(subjectName)) {
-    return ["A", "B", "C", "D", "E"].includes(g) ? 1 : 0;
+    // GP, Subsidiary Mathematics and Subsidiary ICT only earn the 1 point
+    // when the learner has a C grade or better. D and E earn 0 points.
+    return ["A", "B", "C"].includes(g) ? 1 : 0;
   }
 
   switch (g) {

@@ -44,6 +44,7 @@ async function mapWithConcurrency<T, R>(
 async function htmlToPdfBuffer(html: string) {
   const browser = await chromium.launch({
     headless: true,
+    timeout: 180_000,
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
@@ -55,10 +56,13 @@ async function htmlToPdfBuffer(html: string) {
 
   try {
     const page = await browser.newPage({ viewport: { width: 794, height: 1123 } });
-    page.setDefaultTimeout(120_000);
-    page.setDefaultNavigationTimeout(120_000);
+    page.setDefaultTimeout(240_000);
+    page.setDefaultNavigationTimeout(240_000);
 
-    await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 120_000 });
+    // Large class PDFs can exceed 75 pages. Using CSS-background assets in the
+    // template keeps the HTML much smaller, and the longer timeout avoids
+    // closing Chromium while a large document is still being laid out.
+    await page.setContent(html, { waitUntil: "load", timeout: 240_000 });
     await page.emulateMedia({ media: "print" });
 
     return await page.pdf({
@@ -111,7 +115,7 @@ export async function GET(req: Request) {
 
     const skipped: string[] = [];
 
-    const payloadResults = await mapWithConcurrency(studentIds, studentId ? 1 : 4, async (id) => {
+    const payloadResults = await mapWithConcurrency(studentIds, studentId ? 1 : 2, async (id) => {
       try {
         return await buildStudentReportPayload({
           studentId: id,
