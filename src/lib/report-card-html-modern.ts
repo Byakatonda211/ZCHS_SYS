@@ -889,6 +889,167 @@ export function renderModernReportDocument(
     .density-tight .comment-box p, .density-ultra .comment-box p { font-size: 6.1pt; line-height: 1.2; margin: 1.4mm 1.8mm; }
     .density-tight .report-footer, .density-ultra .report-footer { min-height: 5mm; margin-top: 0; font-size: 6.2pt; }
 
+
+
+    /* =========================================================
+       BLACK-AND-WHITE PRINT VISIBILITY OVERRIDES
+       These rules do not move layout elements; they only make
+       borders, headings, and text survive weak monochrome printing.
+       ========================================================= */
+    .report-page {
+      border: 1.4px solid #000 !important;
+      background: #fff !important;
+      color: #000 !important;
+    }
+    .top-rule {
+      background: #000 !important;
+      border-bottom-color: #000 !important;
+    }
+    .school-header,
+    .term-card,
+    .profile-card,
+    .performance-card,
+    .stat-card,
+    .side-panel,
+    .comment-box,
+    .signature-box,
+    .table-wrap {
+      border: 1.3px solid #000 !important;
+      background-color: #fff !important;
+    }
+    .crest-ring,
+    .photo-frame {
+      border-color: #000 !important;
+      box-shadow: inset 0 0 0 0.7mm #fff !important;
+      background-color: #fff !important;
+    }
+    .level-kicker,
+    .school-title h1,
+    .motto,
+    .contact,
+    .term-card span,
+    .term-card strong,
+    .profile-grid span,
+    .profile-grid strong,
+    .score-tile span,
+    .score-tile strong,
+    .score-scale,
+    .grade-showcase span,
+    .grade-showcase strong,
+    .grade-showcase em,
+    .stat-label,
+    .stat-value,
+    .stat-detail,
+    .snapshot-line span,
+    .snapshot-line strong,
+    .mini-note,
+    .scale-row,
+    .scale-row strong,
+    .chip,
+    .chip strong,
+    .points-legend span,
+    .points-legend .subsidiary-note,
+    .points-total strong,
+    .points-cell {
+      color: #000 !important;
+    }
+    .title-lines {
+      border-top-color: #000 !important;
+      border-bottom-color: #000 !important;
+      background: #000 !important;
+    }
+    .report-title-row h2 {
+      color: #000 !important;
+      font-weight: 900 !important;
+    }
+    .section-title,
+    .panel-title,
+    .comment-title,
+    .report-footer {
+      background: #000 !important;
+      color: #fff !important;
+      border: 1.3px solid #000 !important;
+      font-weight: 900 !important;
+    }
+    .section-title span,
+    .panel-title span,
+    .comment-title span {
+      color: #fff !important;
+      background: #000 !important;
+      border: 1px solid #fff !important;
+    }
+    .stat-card::before {
+      background: #000 !important;
+    }
+    .profile-grid div,
+    .snapshot-line,
+    .scale-row {
+      border-color: #000 !important;
+    }
+    .score-tile {
+      border-right-color: #000 !important;
+    }
+    .score-track,
+    .grade-bar {
+      background: #fff !important;
+      border: 1px solid #000 !important;
+    }
+    .score-track i,
+    .grade-bar span {
+      background: #000 !important;
+    }
+    .chip,
+    .points-legend span,
+    .points-legend .subsidiary-note {
+      background: #fff !important;
+      border: 1.1px solid #000 !important;
+    }
+    .grade-pill,
+    .grade-mini {
+      background: #fff !important;
+      color: #000 !important;
+      border: 1.2px solid #000 !important;
+      font-weight: 900 !important;
+    }
+    .signature-line {
+      border-top-color: #000 !important;
+      border-top-width: 1.2px !important;
+    }
+
+    /* Subject achievement table: strong internal and external borders. */
+    .results-table {
+      border: 1.6px solid #000 !important;
+    }
+    .results-table th,
+    .results-table td {
+      border: 1.15px solid #000 !important;
+      color: #000 !important;
+    }
+    .results-table th {
+      background: #efefef !important;
+      color: #000 !important;
+      font-weight: 900 !important;
+    }
+    .results-table th small {
+      color: #000 !important;
+      font-weight: 800 !important;
+    }
+    .results-table td,
+    .results-table .odd td,
+    .level-a .results-table .odd td {
+      background: #fff !important;
+    }
+    .comment {
+      color: #000 !important;
+      font-weight: 700 !important;
+    }
+    .score-cell,
+    .initials,
+    .strong {
+      color: #000 !important;
+      font-weight: 900 !important;
+    }
+
     @media screen {
       body { background: #e5e7eb; padding: 16px; }
       .report-page { margin: 0 auto 20px; box-shadow: 0 8px 24px rgba(0,0,0,0.14); }
